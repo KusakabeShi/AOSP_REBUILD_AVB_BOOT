@@ -59,6 +59,5 @@ rebuild_avb.py --chained-mode
 
 ## 🫡 Credits
 
-- **Genji-Hook**
 - AOSP / Android Verified Boot
 - magisk
