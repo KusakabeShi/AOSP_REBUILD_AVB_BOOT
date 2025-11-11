@@ -1,18 +1,47 @@
 # AOSP AVB Boot Toolchain ⚙️
 
 > **Complete Android boot image backup, patch, sign, and flash toolchain**  
-> Uses **AOSP public test keys** for AVB signing and supports root solutions
+> **Designed for bootloader-locked devices** to maintain root access after OTA updates  
+> **Uses custom signing keys** for AVB verification and supports all major root solutions
 
 ---
 
 ## ✨ Features
 
-- 🔒 **Complete Workflow**: Factory backup → OTA backup → Root patching → AVB signing → Device flashing
-- 🔐 **AOSP Test Key Signing**: Re-sign boot images with AOSP provided public test keys
-- 🧰 **Built-in Tools**: Repository includes all necessary tools (`rebuild_avb.py`, `avbtool.py`, signing keys)
+- 🔒 **Complete Workflow**: Factory backup → OTA backup → Root patching → Custom key signing → Device flashing
+- 🔐 **Custom Key Signing**: Sign boot images with your own private keys for bootloader verification
+- 🧰 **Built-in Tools**: Repository includes all necessary tools (`rebuild_avb.py`, `avbtool.py`, key generation)
 - 🚀 **Root Solution Support**: Auto-detection and patching with Magisk, APatch, KernelSU (GKI/LKM)
 - 📱 **Device Safety**: Comprehensive backup and restore capabilities with signature verification
-- 📦 **CI Friendly**: Can be used directly in GitHub Actions with archive snapshots
+- 📦 **Termux Ready**: Designed to run in Termux environment on Android devices
+- 🔄 **APatch KPM Support**: Special script for re-signing after KernelPatch Module installation
+
+---
+
+## 📦 Dependencies (Termux)
+
+Install required packages in Termux:
+
+```bash
+pkg update
+pkg install python openssl-tool
+```
+
+**Requirements:**
+- **Python 3** - For running avbtool.py and rebuild_avb.py
+- **OpenSSL tools** - For key generation and cryptographic operations
+- **Root access** - For direct partition access on Android device
+
+---
+
+## 🔑 Signing Key Setup
+
+**Replace the default AOSP test key** with your own private key:
+
+```bash
+# Put your private key at this path:
+tools/pem/testkey_rsa4096.pem
+```
 
 ---
 
@@ -20,123 +49,220 @@
 
 ```text
 AOSP_REBUILD_AVB_BOOT/
-├── 1_restore_factory.sh  # Restore factory images from backups
-├── 2_backup_factory.sh   # Backup post-OTA partitions with verification
-├── 3_patch.sh            # Patch boot images with root solutions
-├── 4_sign_patched.sh     # Sign patched images with AVB
-├── 5_flash.sh            # Flash signed images to device partitions
-├── rebuild_avb.py        # Core AVB rebuilding script
-├── verify_images.sh      # Image verification utility
-├── tools/                # Signing keys, avbtool.py, and utilities
+├── 1_restore_factory.sh   # Restore factory images from backups
+├── 2_backup_factory.sh    # Backup post-OTA partitions with verification
+├── 3_patch.sh             # Patch boot images with root solutions
+├── 3-1_dump_user_patched.sh # Dump user-patched images from root manager
+├── 4_sign_patched.sh      # Sign patched images with custom keys
+├── 5_flash.sh             # Flash signed images to device partitions
+├── 9_resign_current.sh    # Re-sign current partitions (APatch KPM support)
+├── rebuild_avb.py         # Core AVB rebuilding script
+├── verify_images.sh       # Image verification utility
+├── tools/                 # Signing keys, avbtool.py, and utilities
+│   ├── pem/               # Private/public key pairs
+│   ├── avbtool.py         # Android Verified Boot tool
+│   └── ...
 └── README.md
 ```
+
+---
 
 ## 🚀 Complete Workflow Guide
 
 ### Prerequisites
 - **Android device** with root access (su permissions)
-- **A/B partition scheme** support
-- **Terminal emulator** or ADB shell access
+- **A/B partition scheme** support (bootloader-locked devices)
+- **Termux** terminal emulator installed
+- Device with **custom ROM** or **bootloader that accepts custom signatures**
 
-### Phase 1: Initial Factory Backup
+### 🔒 Two Main Workflows
+
+This toolchain provides **two distinct workflows** for different scenarios:
+
+## 📱 Workflow 1: OTA Update Process (Scripts 1-5)
+**Use when**: System OTA updates are available and you want to maintain root access
+
+### Step 0: Prepare Factory Backups (Required for Incremental OTAs)
+
+**Why needed**: Incremental OTAs require factory images to restore clean state first.
+
+Choose ONE method to populate `backups/` folder:
+
+**Method A: Extract from Firmware Package (Recommended)**
 ```bash
-# Run this BEFORE applying any OTA updates
-# Creates baseline factory image backups
+# Download firmware matching your build number, extract 6 images to backups/
+mkdir -p backups/
+# Place: boot_a.img, boot_b.img, init_boot_a.img, init_boot_b.img, vbmeta_a.img, vbmeta_b.img
+```
+
+**Method B: Temporary Root**
+```bash
+fastboot boot patched_kernel.img
+# Once booted with root access:
 ./2_backup_factory.sh
 ```
 
-### Phase 2: Post-OTA Update Process
+**Method C: EDL/9008 Mode (Qualcomm)**
 ```bash
-# 1. Apply your OTA update through normal system update
+# Use EDL tools (QFIL, MiFlash) to dump partitions directly
+```
 
-# 2. Create post-OTA backup (with signature verification)
+**Method D: BROM Mode (MediaTek)**
+```bash
+# Use MTK tools (SP Flash Tool, MTKClient) to dump partitions
+```
+
+**Verify backups before proceeding:**
+```bash
+./verify_images.sh backups/
+```
+
+---
+
+### Main OTA Process (After Step 0 Complete)
+
+**Step 1: Restore to factory state**
+```bash
+./1_restore_factory.sh
+# This restores clean, unsigned images to allow OTA installation
+# REQUIRES factory backups from Step 0!
+```
+
+**Step 2: Apply OTA update**
+```bash
+# Apply OTA update through system settings
+# OTA will install to inactive slot (slot A <-> slot B)
+```
+
+**Step 3: Create post-OTA backup**
+```bash
 ./2_backup_factory.sh
-# This will detect OTA changes and create verified backups
+# Detects OTA changes and creates verified backups of new slot
+```
 
-# 3. Patch boot images with your preferred root solution
+**Step 4: Patch boot images (choose ONE method)**
+
+Method A: Auto-patch with CLI
+```bash
 ./3_patch.sh
-# Auto-detects: Magisk, APatch, KernelSU-GKI, KernelSU-LKM
-
-# 4. Sign patched images with AOSP test keys
-./4_sign_patched.sh --image patched/boot_a_magisk_20231201_120000.img
-
-# 5. Flash signed images to device
-./5_flash.sh --image patched_signed/boot_signed.img --vbmeta patched_signed/vbmeta_signed.img
+# Auto-detects target slot and root solution
+# Patches images from backup, NOT currently running slot
 ```
 
-### Phase 3: Recovery (if needed)
+Method B: Dump user-patched images
 ```bash
-# Restore to factory state anytime
+./3-1_dump_user_patched.sh
+# For when user already patched via root manager
+# Dumps from inactive slot partitions, compares with backup to verify patching
+```
+
+**Step 5: Sign patched images**
+```bash
+./4_sign_patched.sh
+# Uses rebuild_avb.py to sign with your custom keys
+```
+
+**Step 6: Flash signed images**
+```bash
+./5_flash.sh
+# Flashes to inactive slot, maintaining A/B partition integrity
+```
+
+## 🔌 Workflow 2: KPM Installation Process (Script 9)
+**Use when**: Installing APatch KernelPatch Modules (KPM) that modify running kernel
+
+**Re-sign current running partitions:**
+```bash
+./9_resign_current.sh
+```
+
+**With options:**
+```bash
+# Test without actual changes
+./9_resign_current.sh --dry-run
+
+# Skip confirmation prompts
+./9_resign_current.sh --force-flash
+```
+
+**This script automatically:**
+1. Dumps current vbmeta, boot, and init_boot partitions from active slot
+2. Signs them with your private key using rebuild_avb.py
+3. Flashes back to current slot (with strong confirmation prompts)
+
+## 🆘 Recovery (Both Workflows)
+```bash
+# Restore to factory state anytime if issues occur
 ./1_restore_factory.sh
 # Compares current partitions with backups and restores differences
 ```
+
+### 💡 Key Concepts for Bootloader-Locked Devices
+
+- **Slot Management**: OTA updates install to the **inactive slot**, while your current rooted system runs from the **active slot**
+- **Custom Key Signing**: Uses your own private keys to maintain boot verification on locked bootloaders
+- **Non-Destructive**: Factory backups allow safe rollback to clean state for OTA installation
+- **Root Preservation**: Automatically maintains root access after each OTA update
+- **KPM Support**: Special handling for APatch Kernel Patch Modules that modify running kernel
+
+---
 
 ## 📋 Script Details
 
 ### `1_restore_factory.sh`
 - **Purpose**: Restore device to factory state
-- **Features**: Hash comparison, size validation, slot detection
+- **Features**: Hash comparison, size validation, slot detection, cleanup
 - **Usage**: `./1_restore_factory.sh [--dry-run] [--force-flash]`
 
 ### `2_backup_factory.sh` 
 - **Purpose**: Backup partition images with OTA change detection
-- **Features**: Signature verification, integrity checks, OTA validation
+- **Features**: Signature verification, integrity checks, OTA validation, cleanup
 - **Usage**: `./2_backup_factory.sh [--dry-run] [--force-backup]`
 
 ### `3_patch.sh`
 - **Purpose**: Patch boot images with root solutions
-- **Features**: Auto-detection of root solutions and device slots
+- **Features**: Auto-detection of root solutions and device slots, cleanup
 - **Usage**: `./3_patch.sh [--slot a|b] [--root magisk|apatch|kernelsu-gki|kernelsu-lkm]`
 
+### `3-1_dump_user_patched.sh` 🆕
+- **Purpose**: Dump user-patched images from root manager (alternative to script 3)
+- **Features**: Dumps from partitions instead of patching, backup comparison verification
+- **Usage**: `./3-1_dump_user_patched.sh [--slot a|b] [--partition boot|init_boot] [--dry-run]`
+- **Use Case**: When user already patched images through root manager interface
+
 ### `4_sign_patched.sh`
-- **Purpose**: Sign patched images with AVB using rebuild_avb.py
-- **Features**: Automatic signing, verification, chained partition support
-- **Usage**: `./4_sign_patched.sh --image <patched_image> [--dry-run]`
+- **Purpose**: Sign patched images with custom keys using rebuild_avb.py
+- **Features**: Automatic signing, verification, chained partition support, cleanup
+- **Usage**: `./4_sign_patched.sh [--dry-run] [--force-sign]`
 
 ### `5_flash.sh`
 - **Purpose**: Flash signed images to device partitions
-- **Features**: Safety confirmations, size validation, slot management
-- **Usage**: `./5_flash.sh --image <signed_image> [--vbmeta <signed_vbmeta>] [--slot a|b]`
+- **Features**: Safety confirmations, size validation, slot management, cleanup
+- **Usage**: `./5_flash.sh [--slot a|b] [--dry-run] [--force-flash]`
 
-## 🔧 Advanced Usage
+### `9_resign_current.sh` 🆕
+- **Purpose**: Re-sign currently running partitions (APatch KPM support)
+- **Features**: Current partition dumping, signing, flashing with confirmations
+- **Usage**: `./9_resign_current.sh [--dry-run] [--force-flash]`
+- **Use Case**: After installing APatch Kernel Patch Modules that modify the running kernel
 
-### Manual Partition Operations
-```bash
-# Specify custom slot
-./3_patch.sh --slot b --root magisk
-
-# Specify custom root solution  
-./3_patch.sh --root kernelsu-gki
-
-# Force operations without confirmation
-./4_sign_patched.sh --image patched/boot.img --force-sign
-./5_flash.sh --image signed/boot.img --force-flash
-
-# Dry run mode (test without changes)
-./1_restore_factory.sh --dry-run
-./2_backup_factory.sh --dry-run
-```
-
-### Chained Partition Mode (Advanced)
-```bash
-# For devices with chained partitions (no vbmeta dependency)
-./4_sign_patched.sh --image patched/boot.img  # Auto-detects chained mode
-./5_flash.sh --image signed/boot.img          # No vbmeta needed
-```
+---
 
 ## ⚠️ Important Notes
 
 ### Security Warnings
-- Uses **AOSP public test keys** - suitable for debugging, development, and custom ROMs
-- **NOT for production devices** - does not use device-specific private keys
+- **Default AOSP keys are for testing only** - replace with your own private keys for production
+- **Designed for bootloader-locked devices** with custom ROM/unlocked-then-relocked bootloader
+- **NOT for production devices with OEM keys** - requires device that accepts custom signatures
 - Always verify `boot.img` is standard Android boot image format
-- Keep factory backups safe for recovery
+- Keep factory backups and private keys safe for recovery
 
 ### Device Compatibility  
-- Designed for **A/B partition scheme** devices
+- Designed for **A/B partition scheme** devices with **bootloader-locked** configuration
 - Requires **root access** for direct partition access
-- Tested on devices using AOSP public key signatures
-- May work on custom ROMs and development devices
+- **Must be used on devices that accept custom signing keys** (custom ROMs, development devices)
+- Tested on devices using custom key signatures after bootloader relock
+- **Will NOT work on stock OEM devices** with hardware-enforced signature verification
 
 ### Safety Features
 - Comprehensive backup system with verification
@@ -144,31 +270,15 @@ AOSP_REBUILD_AVB_BOOT/
 - Multiple confirmation prompts for destructive operations
 - Automatic slot detection and management
 - Hash verification and signature checking
+- **Automatic cleanup** of temporary files after each script execution
+- **Smart OTA detection** prevents unnecessary operations
 
-## 🔍 Troubleshooting
-
-### Common Issues
-```bash
-# Missing partitions
-# Solution: Ensure running on Android device with root
-
-# Size mismatches  
-# Solution: Check backup image compatibility with device
-
-# Signature verification failures
-# Solution: Verify OTA integrity, re-apply if needed
-
-# Root detection issues
-# Solution: Manually specify root solution with --root parameter
-```
-
-### Recovery Procedures
-1. **Boot issues**: Use `./1_restore_factory.sh` to restore working state
-2. **OTA problems**: Re-apply OTA and run `./2_backup_factory.sh` again  
-3. **Patch failures**: Check root solution installation and try manual specification
+---
 
 ## 🫡 Credits
 
 - **AOSP** / Android Verified Boot project
 - **Magisk** / **APatch** / **KernelSU** projects  
+- **Termux** Android terminal emulator
 - **Android** open source community
+- **AOSP_REBUILD_AVB_BOOT** re-sign script

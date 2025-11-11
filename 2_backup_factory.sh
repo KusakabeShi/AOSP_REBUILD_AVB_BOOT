@@ -279,3 +279,27 @@ else
     echo "  • Use './1_restore_factory.sh' to restore anytime"
     echo "========================================"
 fi
+
+# Cleanup temporary files
+echo ""
+echo "Cleaning up temporary files..."
+if [ -d "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR"
+    echo "✓ Temporary files cleaned up"
+else
+    echo "✓ No temporary files to clean up"
+fi
+
+# Clean up new backup directory if it still exists (dry run or failure cases)
+if [ -d "$NEW_BAK_PATH" ] && [ "$DRY_RUN" = true ]; then
+    rm -rf "$NEW_BAK_PATH"
+    echo "✓ Dry run backup directory cleaned up"
+fi
+
+# Clean up any temporary image files in project root
+for img in *.img; do
+    if [ -f "$img" ]; then
+        rm -f "$img"
+        echo "✓ Cleaned up temporary image file: $img"
+    fi
+done

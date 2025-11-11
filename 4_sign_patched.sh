@@ -9,14 +9,9 @@ TMP_DIR=tmp
 # Parse command line arguments
 DRY_RUN=false
 FORCE_SIGN=false
-PATCHED_IMAGE=""
 
 while [ $# -gt 0 ]; do
     case $1 in
-        --image)
-            PATCHED_IMAGE="$2"
-            shift 2
-            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -26,21 +21,13 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         *)
-            echo "Usage: $0 --image <patched_image> [--dry-run] [--force-sign]"
-            echo "  --image       : Path to patched image to sign (required)"
+            echo "Usage: $0 [--dry-run] [--force-sign]"
             echo "  --dry-run     : Show what would be signed without actually signing"
             echo "  --force-sign  : Sign without confirmation"
             exit 1
             ;;
     esac
 done
-
-# Check required parameters
-if [ -z "$PATCHED_IMAGE" ]; then
-    echo "ERROR: --image parameter is required"
-    echo "Usage: $0 --image <patched_image> [--dry-run] [--force-sign]"
-    exit 1
-fi
 
 # Create directories
 mkdir -p "$SIGNED_PATH"
@@ -49,12 +36,21 @@ mkdir -p "$TMP_DIR"
 echo "========================================"
 echo "ANDROID IMAGE SIGNER"
 echo "========================================"
-echo "Preparing to sign patched Android images..."
+echo "Preparing to sign all patched Android images..."
 echo ""
 
-# Check if patched image exists
-if [ ! -f "$PATCHED_IMAGE" ]; then
-    echo "ERROR: Patched image not found: $PATCHED_IMAGE"
+# Check if patched directory exists
+if [ ! -d "$PATCHED_PATH" ]; then
+    echo "ERROR: Patched directory not found: $PATCHED_PATH"
+    echo "Please run './3_patch.sh' first to create patched images."
+    exit 1
+fi
+
+# Check if any patched images exist
+patched_images=$(find "$PATCHED_PATH" -name "*.img" 2>/dev/null)
+if [ -z "$patched_images" ]; then
+    echo "ERROR: No .img files found in $PATCHED_PATH"
+    echo "Please run './3_patch.sh' first to create patched images."
     exit 1
 fi
 
@@ -65,53 +61,17 @@ if [ ! -f "rebuild_avb.py" ]; then
     exit 1
 fi
 
-# Check if backup vbmeta exists
-vbmeta_backup=""
-if [ -f "$IMG_BAK_PATH/vbmeta_a.img" ]; then
-    vbmeta_backup="$IMG_BAK_PATH/vbmeta_a.img"
-elif [ -f "$IMG_BAK_PATH/vbmeta_b.img" ]; then
-    vbmeta_backup="$IMG_BAK_PATH/vbmeta_b.img"
-else
-    echo "ERROR: No vbmeta backup found in $IMG_BAK_PATH"
-    echo "Available files:"
-    ls -la "$IMG_BAK_PATH/" 2>/dev/null || echo "  (directory empty or not found)"
-    exit 1
-fi
-
-echo "✓ Patched image: $PATCHED_IMAGE"
-echo "✓ VBMeta backup: $vbmeta_backup"
+echo "Found patched images:"
+for img in $patched_images; do
+    echo "  ✓ $(basename "$img")"
+done
 echo "✓ rebuild_avb.py: rebuild_avb.py"
-echo ""
-
-# Determine image type and parameters
-image_basename=$(basename "$PATCHED_IMAGE")
-image_type=""
-
-if echo "$image_basename" | grep -q "boot"; then
-    image_type="boot"
-elif echo "$image_basename" | grep -q "init"; then
-    image_type="init_boot"
-else
-    echo "ERROR: Cannot determine image type from filename: $image_basename"
-    echo "Expected filename to contain 'boot' or 'init'"
-    exit 1
-fi
-
-echo "Detected image type: $image_type"
-
-# Generate output filename
-timestamp=$(date +%Y%m%d_%H%M%S)
-signed_image="$SIGNED_PATH/$(basename "$PATCHED_IMAGE" .img)_signed_${timestamp}.img"
-signed_vbmeta="$SIGNED_PATH/vbmeta_signed_${timestamp}.img"
-
-echo "Output files:"
-echo "  Signed image: $signed_image"
-echo "  Signed vbmeta: $signed_vbmeta"
 echo ""
 
 # Confirmation prompt
 if [ "$FORCE_SIGN" = false ] && [ "$DRY_RUN" = false ]; then
-    echo "About to sign $image_type image with rebuild_avb.py"
+    echo "About to sign all patched images with rebuild_avb.py"
+    echo "Images will be copied to current directory, signed, then moved to $SIGNED_PATH"
     echo -n "Continue with signing? (y/N): "
     read -r response
     case $response in
@@ -130,80 +90,123 @@ echo "========================================"
 echo "SIGNING PROCESS"
 echo "========================================"
 
-# Prepare rebuild_avb working directory
-rebuild_work_dir="$TMP_DIR/rebuild_avb_work"
-mkdir -p "$rebuild_work_dir"
+echo "Copying patched images to current directory for signing..."
 
-echo "Copying files to rebuild_avb working directory..."
+# Copy all patched images to current directory
+copied_files=""
+for img in $patched_images; do
+    filename=$(basename "$img")
+    if [ "$DRY_RUN" = true ]; then
+        echo "  DRY RUN: Would copy $img to ./$filename"
+    else
+        cp "$img" "./$filename"
+        if [ $? -eq 0 ]; then
+            echo "  ✓ Copied $filename"
+            copied_files="$copied_files $filename"
+        else
+            echo "ERROR: Failed to copy $filename"
+            exit 1
+        fi
+    fi
+done
 
-# Copy patched image to rebuild_avb directory with standard name
-cp "$PATCHED_IMAGE" "$rebuild_work_dir/${image_type}.img"
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to copy patched image"
-    exit 1
+if [ "$DRY_RUN" = false ]; then
+    echo "✓ All patched images copied to current directory"
 fi
 
-# Copy vbmeta backup to rebuild_avb directory  
-cp "$vbmeta_backup" "$rebuild_work_dir/vbmeta.img"
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to copy vbmeta backup"
-    exit 1
+# Determine rebuild_avb parameters (automatically detect partitions)
+rebuild_params=""
+if [ "$DRY_RUN" = false ]; then
+    # Check if vbmeta.img exists in current directory
+    vbmeta_exists=false
+    if [ -f "vbmeta.img" ]; then
+        vbmeta_exists=true
+        echo "  ✓ vbmeta.img found - regular mode available"
+    else
+        echo "  ⚠ vbmeta.img not found - chained mode will be used"
+    fi
+    
+    # Auto-detect partitions from copied files
+    partitions=""
+    has_init_boot=false
+    for file in $copied_files; do
+        if echo "$file" | grep -q "boot\.img"; then
+            partitions="$partitions boot"
+        elif echo "$file" | grep -q "init_boot\.img"; then
+            partitions="$partitions init_boot"
+            has_init_boot=true
+        fi
+    done
+    
+    # Determine mode based on vbmeta existence and partition types
+    if [ "$vbmeta_exists" = true ] && [ -n "$partitions" ]; then
+        # Regular mode: vbmeta exists and we have standard partitions
+        rebuild_params="--partitions$partitions"
+        echo "  → Using regular mode with vbmeta.img"
+    elif [ "$has_init_boot" = true ] && [ "$vbmeta_exists" = false ]; then
+        # Error: init_boot requires vbmeta.img
+        echo ""
+        echo "ERROR: init_boot.img found but vbmeta.img is missing"
+        echo "init_boot partition requires vbmeta.img for proper verification"
+        echo "Please ensure vbmeta.img is present in the current directory"
+        exit 1
+    elif [ -n "$partitions" ] && [ "$vbmeta_exists" = false ]; then
+        # Chained mode: boot partition without vbmeta (assume it's chained)
+        rebuild_params="--chained-mode"
+        echo "  → Using chained mode (boot partition without vbmeta)"
+    else
+        # Fallback to chained mode for other partition types
+        rebuild_params="--chained-mode"
+        echo "  → Using chained mode (other partitions)"
+    fi
+else
+    rebuild_params="--partitions <auto-detected>"
 fi
-
-echo "✓ Copied patched image and vbmeta to working directory"
-
-# Determine rebuild_avb parameters based on image type
-rebuild_params="--partitions $image_type"
 
 echo "Using rebuild_avb parameters: $rebuild_params"
 
 if [ "$DRY_RUN" = true ]; then
     echo ""
     echo "DRY RUN: Would execute the following signing process:"
-    echo "  1. cd $rebuild_work_dir"
-    echo "  2. python3 ../../rebuild_avb.py $rebuild_params"
-    echo "  3. Copy signed images to $SIGNED_PATH"
-    echo "  4. Verify signed images"
+    echo "  1. python3 rebuild_avb.py $rebuild_params"
+    echo "  2. Move signed images to $SIGNED_PATH"
+    echo "  3. Verify signed images"
+    echo "  4. Clean up working files"
 else
     echo "Starting signing process..."
     echo ""
     
-    # Change to working directory and run rebuild_avb.py
-    cd "$rebuild_work_dir" || exit 1
-    
-    echo "Executing: python3 ../../rebuild_avb.py $rebuild_params"
-    if python3 "../../rebuild_avb.py" $rebuild_params; then
+    echo "Executing: python3 rebuild_avb.py $rebuild_params"
+    if python3 "rebuild_avb.py" $rebuild_params; then
         echo "✓ rebuild_avb.py execution completed successfully"
     else
         echo "ERROR: rebuild_avb.py execution failed"
-        cd - > /dev/null
+        # Clean up copied files on failure
+        for file in $copied_files; do
+            rm -f "./$file"
+        done
         exit 1
     fi
-    
-    # Return to original directory
-    cd - > /dev/null
     
     echo ""
-    echo "Copying signed images to output directory..."
+    echo "Moving signed images to output directory..."
     
-    # Copy signed image (rebuild_avb.py should have modified the original)
-    if [ -f "$rebuild_work_dir/${image_type}.img" ]; then
-        cp "$rebuild_work_dir/${image_type}.img" "$signed_image"
-        echo "✓ Copied signed $image_type image"
-    else
-        echo "ERROR: Signed $image_type image not found after rebuild_avb.py"
+    # Move all .img files to signed directory
+    signed_count=0
+    for file in $copied_files; do
+        if [ -f "./$file" ]; then
+            mv "./$file" "$SIGNED_PATH/$file"
+            echo "  ✓ Moved $file to $SIGNED_PATH/"
+            signed_count=$((signed_count + 1))
+        else
+            echo "ERROR: Signed image not found: ./$file"
+            exit 1
+        fi
+    done
+    
+    if [ $signed_count -eq 0 ]; then
+        echo "ERROR: No signed images were created"
         exit 1
-    fi
-    
-    # Copy signed vbmeta (if it exists and was processed)
-    if [ -f "$rebuild_work_dir/vbmeta.img" ]; then
-        cp "$rebuild_work_dir/vbmeta.img" "$signed_vbmeta"
-        echo "✓ Copied signed vbmeta image"
-    else
-        echo "Note: No vbmeta.img generated (chained partition mode)"
-        # Create a placeholder or skip vbmeta
-        touch "$signed_vbmeta"
-        echo "✓ Created placeholder vbmeta file"
     fi
 fi
 
@@ -213,41 +216,34 @@ echo "SIGNATURE VERIFICATION"
 echo "========================================"
 
 if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN: Would verify signed images:"
-    echo "  python3 tools/avbtool.py verify_image --image $signed_image"
-    if [ -s "$signed_vbmeta" ]; then
-        echo "  python3 tools/avbtool.py verify_image --image $signed_vbmeta"
-    fi
+    echo "DRY RUN: Would verify signed images in $SIGNED_PATH:"
+    for img in $patched_images; do
+        filename=$(basename "$img")
+        echo "  python3 tools/avbtool.py verify_image --image $SIGNED_PATH/$filename"
+    done
 else
     echo "Verifying signed images..."
     
-    # Verify signed image
-    echo "Verifying signed $image_type image..."
-    if python3 tools/avbtool.py verify_image --image "$signed_image" >/dev/null 2>&1; then
-        echo "✓ Signed $image_type image verification passed"
-    else
-        echo "ERROR: Signed $image_type image verification failed!"
+    verification_failed=false
+    for file in $copied_files; do
+        signed_file="$SIGNED_PATH/$file"
+        if [ -f "$signed_file" ]; then
+            echo "Verifying $file..."
+            if python3 tools/avbtool.py verify_image --image "$signed_file" >/dev/null 2>&1; then
+                echo "  ✓ $file verification passed"
+            else
+                echo "  ERROR: $file verification failed!"
+                verification_failed=true
+            fi
+        fi
+    done
+    
+    if [ "$verification_failed" = true ]; then
+        echo "ERROR: One or more image verifications failed!"
         exit 1
     fi
     
-    # Verify signed vbmeta (only if it's a real file, not placeholder)
-    if [ -s "$signed_vbmeta" ]; then
-        echo "Verifying signed vbmeta image..."
-        if python3 tools/avbtool.py verify_image --image "$signed_vbmeta" >/dev/null 2>&1; then
-            echo "✓ Signed vbmeta image verification passed"
-        else
-            echo "ERROR: Signed vbmeta image verification failed!"
-            exit 1
-        fi
-    else
-        echo "✓ Skipping vbmeta verification (chained partition mode)"
-    fi
-fi
-
-# Cleanup working directory
-if [ "$DRY_RUN" = false ]; then
-    rm -rf "$rebuild_work_dir"
-    echo "✓ Cleaned up working directory"
+    echo "✓ All signed images verified successfully"
 fi
 
 echo ""
@@ -255,30 +251,43 @@ echo "========================================"
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN COMPLETE"
     echo "========================================"
-    echo "Would have created signed images:"
-    echo "  Signed $image_type: $signed_image"
-    if [ -s "$signed_vbmeta" ]; then
-        echo "  Signed vbmeta: $signed_vbmeta"
-    fi
+    echo "Would have created signed images in $SIGNED_PATH:"
+    for img in $patched_images; do
+        filename=$(basename "$img")
+        echo "  ✓ $filename"
+    done
 else
     echo "SIGNING COMPLETE"
     echo "========================================"
-    echo "Successfully created and verified signed images:"
-    echo "  ✓ Signed $image_type: $signed_image"
-    if [ -s "$signed_vbmeta" ]; then
-        echo "  ✓ Signed vbmeta: $signed_vbmeta"
-    fi
+    echo "Successfully created and verified signed images in $SIGNED_PATH:"
+    for file in $copied_files; do
+        if [ -f "$SIGNED_PATH/$file" ]; then
+            echo "  ✓ $file"
+        fi
+    done
     echo ""
     echo "NEXT STEPS:"
-    if [ -s "$signed_vbmeta" ]; then
-        echo "1. Use './5_flash.sh' to flash these signed images to your device"
-        echo "2. Or manually flash using fastboot:"
-        echo "   fastboot flash $image_type $signed_image"
-        echo "   fastboot flash vbmeta $signed_vbmeta"
-    else
-        echo "1. Flash only the signed $image_type image (chained partition mode):"
-        echo "   fastboot flash $image_type $signed_image"
-        echo "2. Or use './5_flash.sh --image $signed_image' (vbmeta not needed)"
-    fi
+    echo "1. Use './5_flash.sh' to flash these signed images to your device"
+    echo "2. Or manually flash using fastboot from $SIGNED_PATH directory"
 fi
 echo "========================================"
+
+# Cleanup temporary files
+echo ""
+echo "Cleaning up temporary files..."
+if [ -d "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR"
+    echo "✓ Temporary files cleaned up"
+else
+    echo "✓ No temporary files to clean up"
+fi
+
+# Clean up any image files copied to project root (most important for this script)
+if [ "$DRY_RUN" = false ]; then
+    for img in *.img; do
+        if [ -f "$img" ]; then
+            rm -f "$img"
+            echo "✓ Cleaned up temporary image file: $img"
+        fi
+    done
+fi

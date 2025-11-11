@@ -216,3 +216,13 @@ else
 fi
 
 echo "Success, you can perform OTA now."
+
+# Cleanup temporary files
+echo ""
+echo "Cleaning up temporary files..."
+if [ -d "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR"
+    echo "✓ Temporary files cleaned up"
+else
+    echo "✓ No temporary files to clean up"
+fi

@@ -6,24 +6,19 @@ A_SUFFIX=_a
 B_SUFFIX=_b
 
 # Parse command line arguments
-SIGNED_IMAGE=""
-SIGNED_VBMETA=""
+CURRENT_SLOT=""
 TARGET_SLOT=""
 DRY_RUN=false
 FORCE_FLASH=false
 
 while [ $# -gt 0 ]; do
     case $1 in
-        --image)
-            SIGNED_IMAGE="$2"
-            shift 2
-            ;;
-        --vbmeta)
-            SIGNED_VBMETA="$2"
-            shift 2
-            ;;
         --slot)
             TARGET_SLOT="$2"
+            shift 2
+            ;;
+        --current-slot)
+            CURRENT_SLOT="$2"
             shift 2
             ;;
         --dry-run)
@@ -35,10 +30,9 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         *)
-            echo "Usage: $0 --image <signed_image> --vbmeta <signed_vbmeta> [--slot a|b] [--dry-run] [--force-flash]"
-            echo "  --image       : Path to signed image file (required)"
-            echo "  --vbmeta      : Path to signed vbmeta file (required)"
-            echo "  --slot        : Target slot (a or b), auto-detect if not provided"
+            echo "Usage: $0 [--slot a|b] [--current-slot a|b] [--dry-run] [--force-flash]"
+            echo "  --slot        : Target slot to flash (a or b), defaults to inactive slot"
+            echo "  --current-slot: Current active slot for auto-detection, auto-detect if not provided"
             echo "  --dry-run     : Show what would be flashed without actually flashing"
             echo "  --force-flash : Flash without confirmation"
             exit 1
@@ -46,100 +40,98 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Check required parameters
-if [ -z "$SIGNED_IMAGE" ]; then
-    echo "ERROR: --image parameter is required"
-    echo "Usage: $0 --image <signed_image> [--vbmeta <signed_vbmeta>] [--slot a|b] [--dry-run] [--force-flash]"
-    echo "Note: --vbmeta is optional for chained partition mode"
-    exit 1
-fi
-
 echo "========================================"
 echo "ANDROID IMAGE FLASHER"
 echo "========================================"
 echo "Preparing to flash signed Android images..."
 echo ""
 
-# Check if signed images exist
-if [ ! -f "$SIGNED_IMAGE" ]; then
-    echo "ERROR: Signed image not found: $SIGNED_IMAGE"
+# Check if signed directory exists
+if [ ! -d "$SIGNED_PATH" ]; then
+    echo "ERROR: Signed directory not found: $SIGNED_PATH"
+    echo "Please run './4_sign_patched.sh' first to create signed images."
     exit 1
 fi
 
-if [ -n "$SIGNED_VBMETA" ] && [ ! -f "$SIGNED_VBMETA" ]; then
-    echo "ERROR: Signed vbmeta not found: $SIGNED_VBMETA"
+# Check if any signed images exist
+signed_images=$(find "$SIGNED_PATH" -name "*.img" 2>/dev/null)
+if [ -z "$signed_images" ]; then
+    echo "ERROR: No .img files found in $SIGNED_PATH"
+    echo "Please run './4_sign_patched.sh' first to create signed images."
     exit 1
 fi
 
-echo "✓ Signed image: $SIGNED_IMAGE"
-if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-    echo "✓ Signed vbmeta: $SIGNED_VBMETA"
-else
-    echo "Note: No vbmeta image provided (chained partition mode)"
-fi
-
-# Determine image type from filename
-image_basename=$(basename "$SIGNED_IMAGE")
-if echo "$image_basename" | grep -q "boot"; then
-    if echo "$image_basename" | grep -q "init"; then
-        image_type="init_boot"
+echo "Found signed images:"
+images_to_flash=""
+vbmeta_image=""
+for img in $signed_images; do
+    filename=$(basename "$img")
+    echo "  ✓ $filename"
+    if [ "$filename" = "vbmeta.img" ]; then
+        vbmeta_image="$img"
     else
-        image_type="boot"
+        images_to_flash="$images_to_flash $img"
     fi
-else
-    echo "ERROR: Cannot determine image type from filename: $image_basename"
-    echo "Expected filename to contain 'boot' or 'init'"
-    exit 1
-fi
-
-echo "✓ Detected image type: $image_type"
+done
+echo ""
 
 # Detect current slot if not provided
 detect_current_slot() {
+    if [ -n "$CURRENT_SLOT" ]; then
+        echo "Using manually specified current slot: $CURRENT_SLOT"
+        return 0
+    fi
+    
+    # Try to detect current slot
+    if [ -f "/proc/cmdline" ]; then
+        if grep -q "androidboot.slot_suffix=_a" /proc/cmdline; then
+            CURRENT_SLOT="a"
+        elif grep -q "androidboot.slot_suffix=_b" /proc/cmdline; then
+            CURRENT_SLOT="b"
+        fi
+    fi
+    
+    # Alternative method: check ro.boot.slot_suffix
+    if [ -z "$CURRENT_SLOT" ]; then
+        slot_suffix=$(getprop ro.boot.slot_suffix 2>/dev/null)
+        case "$slot_suffix" in
+            "_a") CURRENT_SLOT="a" ;;
+            "_b") CURRENT_SLOT="b" ;;
+        esac
+    fi
+    
+    # Alternative method: check current active slot
+    if [ -z "$CURRENT_SLOT" ] && command -v bootctl >/dev/null 2>&1; then
+        current=$(bootctl get-current 2>/dev/null)
+        case "$current" in
+            "0") CURRENT_SLOT="a" ;;
+            "1") CURRENT_SLOT="b" ;;
+        esac
+    fi
+    
+    if [ -n "$CURRENT_SLOT" ]; then
+        echo "Auto-detected current active slot: $CURRENT_SLOT"
+    else
+        echo "ERROR: Cannot detect current active slot!"
+        echo "Please specify current slot manually with --current-slot a or --current-slot b"
+        exit 1
+    fi
+}
+
+# Determine target slot (same as current slot by default)
+determine_target_slot() {
     if [ -n "$TARGET_SLOT" ]; then
         echo "Using manually specified target slot: $TARGET_SLOT"
         return 0
     fi
     
-    # Try to detect current slot to determine inactive slot
-    current_slot=""
-    
-    # Try reading from /proc/cmdline
-    if [ -f "/proc/cmdline" ]; then
-        if grep -q "androidboot.slot_suffix=_a" /proc/cmdline; then
-            current_slot="a"
-        elif grep -q "androidboot.slot_suffix=_b" /proc/cmdline; then
-            current_slot="b"
-        fi
-    fi
-    
-    # Alternative method: check ro.boot.slot_suffix
-    if [ -z "$current_slot" ]; then
-        slot_suffix=$(getprop ro.boot.slot_suffix 2>/dev/null)
-        case "$slot_suffix" in
-            "_a") current_slot="a" ;;
-            "_b") current_slot="b" ;;
-        esac
-    fi
-    
-    if [ -n "$current_slot" ]; then
-        # For A/B devices, flash to the inactive slot
-        if [ "$current_slot" = "a" ]; then
-            TARGET_SLOT="b"
-        else
-            TARGET_SLOT="a"
-        fi
-        echo "Auto-detected current slot: $current_slot"
-        echo "Will flash to inactive slot: $TARGET_SLOT"
-    else
-        echo "WARNING: Cannot detect current slot!"
-        echo "Please specify target slot manually with --slot a or --slot b"
-        echo "IMPORTANT: For A/B devices, flash to the INACTIVE slot"
-        exit 1
-    fi
+    # Default to same slot (restore to current slot)
+    TARGET_SLOT="$CURRENT_SLOT"
+    echo "Target slot: $TARGET_SLOT (same as current slot - restore mode)"
 }
 
 detect_current_slot
+determine_target_slot
 
 # Validate target slot
 if [ "$TARGET_SLOT" != "a" ] && [ "$TARGET_SLOT" != "b" ]; then
@@ -148,69 +140,83 @@ if [ "$TARGET_SLOT" != "a" ] && [ "$TARGET_SLOT" != "b" ]; then
     exit 1
 fi
 
-# Determine partition paths
-target_suffix="_${TARGET_SLOT}"
-image_partition="${BLOCK_PATH}/${image_type}${target_suffix}"
-if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-    vbmeta_partition="${BLOCK_PATH}/vbmeta${target_suffix}"
-else
-    vbmeta_partition=""
-fi
-
+# Build partition mapping
 echo ""
 echo "========================================"
 echo "FLASH CONFIGURATION"
 echo "========================================"
+echo "Current active slot: $CURRENT_SLOT"
 echo "Target slot: $TARGET_SLOT"
-echo "Image type: $image_type"
-echo "Target partitions:"
-echo "  ${image_type}: $image_partition"
-if [ -n "$vbmeta_partition" ]; then
-    echo "  vbmeta: $vbmeta_partition"
+echo ""
+
+target_suffix="_${TARGET_SLOT}"
+flash_list=""
+partition_checks=""
+
+# Process each image to flash
+for img in $images_to_flash; do
+    filename=$(basename "$img")
+    if echo "$filename" | grep -q "boot\.img"; then
+        partition_name="boot"
+    elif echo "$filename" | grep -q "init_boot\.img"; then
+        partition_name="init_boot"
+    else
+        echo "ERROR: Cannot determine partition type from filename: $filename"
+        exit 1
+    fi
+    
+    partition_path="${BLOCK_PATH}/${partition_name}${target_suffix}"
+    echo "Will flash: $filename -> $partition_path"
+    flash_list="$flash_list $img:$partition_path:$partition_name"
+    partition_checks="$partition_checks $partition_path"
+done
+
+# Add vbmeta if present
+if [ -n "$vbmeta_image" ]; then
+    vbmeta_partition="${BLOCK_PATH}/vbmeta${target_suffix}"
+    echo "Will flash: vbmeta.img -> $vbmeta_partition"
+    flash_list="$flash_list $vbmeta_image:$vbmeta_partition:vbmeta"
+    partition_checks="$partition_checks $vbmeta_partition"
 else
-    echo "  vbmeta: (not applicable - chained partition mode)"
+    echo "Note: No vbmeta.img found (chained partition mode)"
 fi
+
 echo ""
 
 # Check if target partitions exist
-if [ ! -b "$image_partition" ]; then
-    echo "ERROR: Target partition not found: $image_partition"
-    echo "This script must be run on an Android device with root access"
-    exit 1
-fi
+echo "Verifying target partitions..."
+for partition in $partition_checks; do
+    if [ ! -b "$partition" ]; then
+        echo "ERROR: Target partition not found: $partition"
+        echo "This script must be run on an Android device with root access"
+        exit 1
+    fi
+    echo "  ✓ $partition"
+done
 
-if [ -n "$vbmeta_partition" ] && [ ! -b "$vbmeta_partition" ]; then
-    echo "ERROR: Target vbmeta partition not found: $vbmeta_partition"
-    echo "This script must be run on an Android device with root access"
-    exit 1
-fi
-
-echo "✓ Target partitions verified"
-
-# Get partition sizes for validation
-image_size=$(stat -c%s "$SIGNED_IMAGE")
-image_partition_size=$(blockdev --getsize64 "$image_partition")
-
+# Validate sizes for all images
 echo ""
 echo "Size validation:"
-echo "  ${image_type} image: $image_size bytes"
-echo "  ${image_type} partition: $image_partition_size bytes"
+size_validation_failed=false
 
-if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-    vbmeta_size=$(stat -c%s "$SIGNED_VBMETA")
-    vbmeta_partition_size=$(blockdev --getsize64 "$vbmeta_partition")
-    echo "  vbmeta image: $vbmeta_size bytes"
-    echo "  vbmeta partition: $vbmeta_partition_size bytes"
-fi
+for entry in $flash_list; do
+    image_file=$(echo "$entry" | cut -d: -f1)
+    partition_path=$(echo "$entry" | cut -d: -f2)
+    partition_name=$(echo "$entry" | cut -d: -f3)
+    
+    image_size=$(stat -c%s "$image_file")
+    partition_size=$(blockdev --getsize64 "$partition_path")
+    
+    echo "  $partition_name: $image_size bytes (partition: $partition_size bytes)"
+    
+    if [ "$image_size" -gt "$partition_size" ]; then
+        echo "    ERROR: Image too large for partition!"
+        size_validation_failed=true
+    fi
+done
 
-# Validate sizes
-if [ "$image_size" -gt "$image_partition_size" ]; then
-    echo "ERROR: ${image_type} image too large for partition"
-    exit 1
-fi
-
-if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ] && [ "$vbmeta_size" -gt "$vbmeta_partition_size" ]; then
-    echo "ERROR: vbmeta image too large for partition"
+if [ "$size_validation_failed" = true ]; then
+    echo "ERROR: One or more images are too large for their partitions"
     exit 1
 fi
 
@@ -227,12 +233,11 @@ if [ "$FORCE_FLASH" = false ] && [ "$DRY_RUN" = false ]; then
     echo ""
     echo "Target slot: $TARGET_SLOT"
     echo "Images to flash:"
-    echo "  $SIGNED_IMAGE -> $image_partition"
-    if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-        echo "  $SIGNED_VBMETA -> $vbmeta_partition"
-    else
-        echo "  (vbmeta not applicable - chained partition mode)"
-    fi
+    for entry in $flash_list; do
+        image_file=$(echo "$entry" | cut -d: -f1)
+        partition_path=$(echo "$entry" | cut -d: -f2)
+        echo "  $(basename "$image_file") -> $partition_path"
+    done
     echo ""
     echo "Make sure you have backups and understand the risks!"
     echo ""
@@ -254,36 +259,39 @@ echo "========================================"
 flash_image() {
     local source_image=$1
     local target_partition=$2
-    local image_name=$3
+    local partition_name=$3
     
-    echo "Flashing $image_name..."
+    echo "Flashing $partition_name..."
     
     if [ "$DRY_RUN" = true ]; then
         echo "  DRY RUN: Would execute: dd if=$source_image of=$target_partition bs=4096"
     else
         echo "  Executing: dd if=$source_image of=$target_partition bs=4096"
         if dd if="$source_image" of="$target_partition" bs=4096 2>/dev/null; then
-            echo "  ✓ Successfully flashed $image_name"
+            echo "  ✓ Successfully flashed $partition_name"
         else
-            echo "  ERROR: Failed to flash $image_name"
+            echo "  ERROR: Failed to flash $partition_name"
             return 1
         fi
     fi
 }
 
-# Flash the images
-if ! flash_image "$SIGNED_IMAGE" "$image_partition" "$image_type"; then
-    echo "ERROR: ${image_type} flashing failed!"
-    exit 1
-fi
-
-if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-    if ! flash_image "$SIGNED_VBMETA" "$vbmeta_partition" "vbmeta"; then
-        echo "ERROR: vbmeta flashing failed!"
-        exit 1
+# Flash all images
+flash_failed=false
+for entry in $flash_list; do
+    image_file=$(echo "$entry" | cut -d: -f1)
+    partition_path=$(echo "$entry" | cut -d: -f2)
+    partition_name=$(echo "$entry" | cut -d: -f3)
+    
+    if ! flash_image "$image_file" "$partition_path" "$partition_name"; then
+        echo "ERROR: $partition_name flashing failed!"
+        flash_failed=true
     fi
-else
-    echo "Skipping vbmeta flash (chained partition mode)"
+done
+
+if [ "$flash_failed" = true ]; then
+    echo "ERROR: One or more flash operations failed!"
+    exit 1
 fi
 
 echo ""
@@ -291,25 +299,34 @@ echo "========================================"
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN COMPLETE"
     echo "========================================"
-    echo "Would have flashed:"
-    echo "  ✓ ${image_type} to slot $TARGET_SLOT"
-    if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-        echo "  ✓ vbmeta to slot $TARGET_SLOT"
-    fi
+    echo "Would have flashed to slot $TARGET_SLOT:"
+    for entry in $flash_list; do
+        partition_name=$(echo "$entry" | cut -d: -f3)
+        echo "  ✓ $partition_name"
+    done
 else
     echo "FLASHING COMPLETE"
     echo "========================================"
-    echo "Successfully flashed:"
-    echo "  ✓ ${image_type} to slot $TARGET_SLOT"
-    if [ -n "$SIGNED_VBMETA" ] && [ -s "$SIGNED_VBMETA" ]; then
-        echo "  ✓ vbmeta to slot $TARGET_SLOT"
-    fi
+    echo "Successfully flashed to slot $TARGET_SLOT:"
+    for entry in $flash_list; do
+        partition_name=$(echo "$entry" | cut -d: -f3)
+        echo "  ✓ $partition_name"
+    done
     echo ""
-    echo "IMPORTANT NEXT STEPS:"
+    echo "NEXT STEPS:"
     echo "1. Reboot your device to test the changes"
-    echo "2. If you flashed to inactive slot, set it as active:"
-    echo "   bootctl set-active-boot-slot $TARGET_SLOT"
-    echo "3. Monitor the device boot process carefully"
-    echo "4. If issues occur, use './1_restore_factory.sh' to recover"
+    echo "2. Monitor the device boot process carefully"
+    echo "3. If issues occur, use './1_restore_factory.sh' to recover"
 fi
 echo "========================================"
+
+# Cleanup temporary files
+echo ""
+echo "Cleaning up temporary files..."
+# Clean up any temporary image files in project root
+for img in *.img; do
+    if [ -f "$img" ]; then
+        rm -f "$img"
+        echo "✓ Cleaned up temporary image file: $img"
+    fi
+done

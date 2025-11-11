@@ -120,7 +120,7 @@ class AvbImageParser:
     
     @staticmethod
     def _parse_chain_descriptor(content):
-        """解析Chain描述符"""
+        """Parse Chain descriptor"""
         return {
             'partition_name': AvbImageParser._extract_pattern(content, r'Partition Name:\s+(\S+)'),
             'rollback_index_location': AvbImageParser._extract_pattern(content, r'Rollback Index Location:\s+(\d+)'),
@@ -130,8 +130,8 @@ class AvbImageParser:
     
     @staticmethod
     def _parse_prop_descriptor(content):
-        """解析属性描述符"""
-        # 属性格式: key -> 'value'
+        """Parse property descriptor"""
+        # Property format: key -> 'value'
         prop_match = re.search(r"(\S+)\s+->\s+'([^']*)'", content)
         if prop_match:
             return {
@@ -172,7 +172,7 @@ class AvbRebuilder:
         
         available_keys = []
         for key_path in key_candidates:
-            # 转换为绝对路径并标准化路径分隔符
+            # Convert to absolute path and normalize path separators
             absolute_key_path = os.path.normpath(os.path.join(self.working_dir, key_path))
             if os.path.exists(absolute_key_path):
                 available_keys.append(absolute_key_path)
@@ -214,26 +214,12 @@ class AvbRebuilder:
         sys.exit(1)
     
     def create_backup(self):
-        """Create backup"""
-        backup_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = f"backup_{backup_time}"
-        os.makedirs(backup_dir, exist_ok=True)
-        
-        print(f"\n=== Creating backup: {backup_dir} ===")
-        
-        files_to_backup = []
-        for file in os.listdir('.'):
-            if file.endswith('.img') and os.path.isfile(file):
-                files_to_backup.append(file)
-        
-        for file in files_to_backup:
-            shutil.copy2(file, os.path.join(backup_dir, file))
-            print(f"[BACKUP] {file} -> {backup_dir}/{file}")
-        
-        return backup_dir
+        """Backup functionality disabled"""
+        print(f"\n=== Backup disabled ===")
+        return None
     
     def detect_partition_images(self, exclude_vbmeta=True):
-        """自动检测当前目录中的分区镜像"""
+        """Auto-detect partition images in current directory"""
         partition_images = {}
         
         common_partitions = ['boot', 'init_boot']
@@ -264,30 +250,30 @@ class AvbRebuilder:
         
         if current_info and current_info.get('image_size'):
             partition_size = int(current_info['image_size'])
-            print(f"[INFO] 从当前镜像获取分区大小: {partition_size} 字节")
+            print(f"[INFO] Got partition size from current image: {partition_size} bytes")
         else:
    
-            print(f"[ERROR] 无法获取分区 {partition_name} 的大小信息")
+            print(f"[ERROR] Unable to get size information for partition {partition_name}")
             return False
         
         if is_chained_partition:
             cmd = [PYTHON_EXECUTABLE, self.avbtool_path, "erase_footer", "--image", image_path]
-            self.parser.run_command(cmd, f"擦除 {partition_name} 的AVB footer")
+            self.parser.run_command(cmd, f"Erase AVB footer for {partition_name}")
             
             return self._rebuild_chained_partition(partition_name, image_path, partition_size, 
                                                  chain_algorithm, chain_rollback_index, 
                                                  current_info, use_original_salt)
         else:
             cmd = [PYTHON_EXECUTABLE, self.avbtool_path, "erase_footer", "--image", image_path]
-            self.parser.run_command(cmd, f"擦除 {partition_name} 的AVB footer")
+            self.parser.run_command(cmd, f"Erase AVB footer for {partition_name}")
             
             return self._rebuild_hash_partition(partition_name, image_path, partition_size, 
                                               vbmeta_info, current_info, use_original_salt)
     
     def _rebuild_chained_partition(self, partition_name, image_path, partition_size, 
                                   algorithm, rollback_index, current_info, use_original_salt):
-        """重建链式分区"""
-        print(f"[INFO] 重建链式分区 {partition_name}")
+        """Rebuild chained partition"""
+        print(f"[INFO] Rebuilding chained partition {partition_name}")
         
         hash_desc = None
         props = []
@@ -300,10 +286,10 @@ class AvbRebuilder:
         
         if hash_desc and use_original_salt:
             salt = hash_desc['salt']
-            print(f"[INFO] 使用原有salt: {salt}")
+            print(f"[INFO] Using original salt: {salt}")
         else:
             salt = None
-            print(f"[INFO] 重新生成salt")
+            print(f"[INFO] Regenerating salt")
         
         suitable_key = self.get_key_for_algorithm(algorithm)
         
@@ -324,21 +310,21 @@ class AvbRebuilder:
         for prop in props:
             if prop.get('key') and prop.get('value'):
                 cmd.extend(["--prop", f"{prop['key']}:{prop['value']}"])
-                print(f"[INFO] 添加属性: {prop['key']} = {prop['value']}")
+                print(f"[INFO] Adding property: {prop['key']} = {prop['value']}")
         
-        result = self.parser.run_command(cmd, f"为链式分区 {partition_name} 添加签名footer")
+        result = self.parser.run_command(cmd, f"Add signature footer for chained partition {partition_name}")
         
         if result:
-            print(f"[SUCCESS] 链式分区 {partition_name} 重建成功")
+            print(f"[SUCCESS] Chained partition {partition_name} rebuilt successfully")
             return True
         else:
-            print(f"[ERROR] 链式分区 {partition_name} 重建失败")
+            print(f"[ERROR] Chained partition {partition_name} rebuild failed")
             return False
     
     def _rebuild_hash_partition(self, partition_name, image_path, partition_size, 
                                vbmeta_info, current_info, use_original_salt):
-        """重建普通hash分区"""
-        print(f"[INFO] 重建普通hash分区 {partition_name}")
+        """Rebuild regular hash partition"""
+        print(f"[INFO] Rebuilding regular hash partition {partition_name}")
         
         salt = None
         algorithm = "NONE"
@@ -352,17 +338,17 @@ class AvbRebuilder:
                         algorithm = desc.get('hash_algorithm', 'sha256').upper()
                         if algorithm == 'SHA256':
                             algorithm = 'NONE'
-                        print(f"[INFO] 从当前镜像获取salt: {salt[:16]}...")
+                        print(f"[INFO] Got salt from current image: {salt[:16]}...")
                 elif desc.get('type') == 'prop':
                     prop_key = desc.get('key', '')
                     prop_value = desc.get('value', '')
                     partition_props.append(f"{prop_key}:{prop_value}")
-                    print(f"[INFO] 发现分区属性: {prop_key} -> {prop_value}")
+                    print(f"[INFO] Found partition property: {prop_key} -> {prop_value}")
         
         if not salt:
             import secrets
-            salt = secrets.token_hex(32)  # 生成64字符的十六进制字符串
-            print(f"[INFO] 生成新的salt: {salt[:16]}...")
+            salt = secrets.token_hex(32)  # Generate 64-character hex string
+            print(f"[INFO] Generated new salt: {salt[:16]}...")
         
         cmd = [
             PYTHON_EXECUTABLE, self.avbtool_path,
@@ -373,31 +359,31 @@ class AvbRebuilder:
             "--algorithm", algorithm
         ]
         
-        # 在Windows下必须指定salt
+        # Salt must be specified on Windows
         cmd.extend(["--salt", salt])
         
-        # 添加prop描述符
+        # Add prop descriptors
         for prop in partition_props:
             cmd.extend(["--prop", prop])
 
-        result = self.parser.run_command(cmd, f"为普通分区 {partition_name} 添加hash footer")
+        result = self.parser.run_command(cmd, f"Add hash footer for regular partition {partition_name}")
         
         if result:
-            print(f"[SUCCESS] 普通分区 {partition_name} 重建成功")
+            print(f"[SUCCESS] Regular partition {partition_name} rebuilt successfully")
             return True
         else:
-            print(f"[ERROR] 普通分区 {partition_name} 重建失败")
+            print(f"[ERROR] Regular partition {partition_name} rebuild failed")
             return False
     
     def rebuild_vbmeta(self, backup_dir, partition_images):
-        """重建vbmeta镜像"""
-        print(f"\n=== 重建vbmeta镜像 ===")
+        """Rebuild vbmeta image"""
+        print(f"\n=== Rebuilding vbmeta image ===")
         
-        original_vbmeta = os.path.join(backup_dir, "vbmeta.img")
+        original_vbmeta = "vbmeta.img"
         vbmeta_info = self.parser.parse_image_info(self.avbtool_path, original_vbmeta)
         
         if not vbmeta_info:
-            print("[ERROR] 无法解析原vbmeta信息")
+            print("[ERROR] Unable to parse original vbmeta information")
             return False
         
         vbmeta_algorithm = vbmeta_info.get('algorithm', 'SHA256_RSA4096')
@@ -417,44 +403,44 @@ class AvbRebuilder:
             "--padding_size", str(padding_size)
         ]
         
-        # 保留原有的 vbmeta 描述符
+        # Preserve original vbmeta descriptors
         cmd.extend(["--include_descriptors_from_image", original_vbmeta])
         
         for partition_name, image_path in partition_images.items():
             if os.path.exists(image_path):
                 cmd.extend(["--include_descriptors_from_image", image_path])
         
-        result = self.parser.run_command(cmd, "生成新的vbmeta镜像")
+        result = self.parser.run_command(cmd, "Generate new vbmeta image")
         
         if result and os.path.exists("vbmeta_new.img"):
             shutil.move("vbmeta_new.img", "vbmeta.img")
-            print("[SUCCESS] vbmeta.img 重建成功")
+            print("[SUCCESS] vbmeta.img rebuilt successfully")
             return True
         else:
-            print("[ERROR] vbmeta.img 重建失败")
+            print("[ERROR] vbmeta.img rebuild failed")
             return False
     
     def verify_result(self):
-        """验证重建结果"""
-        print(f"\n=== 验证重建结果 ===")
+        """Verify rebuild results"""
+        print(f"\n=== Verifying rebuild results ===")
         
         if os.path.exists("vbmeta.img"):
-            print("\n[验证] 新的vbmeta.img:")
+            print("\n[VERIFY] New vbmeta.img:")
             self.parser.parse_image_info(self.avbtool_path, "vbmeta.img")
         else:
-            print("\n[信息] 未找到vbmeta.img（可能是纯链式分区模式）")
+            print("\n[INFO] vbmeta.img not found (possibly pure chained partition mode)")
         
         partition_images = self.detect_partition_images()
         for partition_name, image_path in partition_images.items():
-            print(f"\n[验证] {partition_name}.img:")
+            print(f"\n[VERIFY] {partition_name}.img:")
             self.parser.parse_image_info(self.avbtool_path, image_path)
     
     def rebuild_all(self, partitions=None, use_original_salt=True, chained_mode=False):
-        """执行完整的重建流程"""
-        print("=== AVB重建开始 ===")
+        """Execute complete rebuild process"""
+        print("=== AVB rebuild started ===")
         
         if chained_mode:
-            print("[INFO] 链式分区模式已启用")
+            print("[INFO] Chained partition mode enabled")
         
         backup_dir = self.create_backup()
         
@@ -465,14 +451,14 @@ class AvbRebuilder:
                 if os.path.exists(img_file):
                     partition_name = img_file.replace('.img', '')
                     partition_images[partition_name] = img_file
-                    print(f"[指定] 使用分区镜像: {partition_name} -> {img_file}")
+                    print(f"[SPECIFIED] Using partition image: {partition_name} -> {img_file}")
                 else:
-                    print(f"[WARNING] 指定的分区镜像不存在: {img_file}")
+                    print(f"[WARNING] Specified partition image does not exist: {img_file}")
         else:
             partition_images = self.detect_partition_images()
         
         if not partition_images:
-            print("[ERROR] 未检测到任何分区镜像文件")
+            print("[ERROR] No partition image files detected")
             return False
         
         chained_partitions = []
@@ -482,27 +468,27 @@ class AvbRebuilder:
             current_info = self.parser.parse_image_info(self.avbtool_path, image_path)
             if current_info and current_info.get('algorithm') and current_info['algorithm'] != 'NONE':
                 chained_partitions.append((partition_name, image_path))
-                print(f"[INFO] {partition_name} 是链式分区")
+                print(f"[INFO] {partition_name} is a chained partition")
             else:
                 regular_partitions.append((partition_name, image_path))
-                print(f"[INFO] {partition_name} 是普通分区")
+                print(f"[INFO] {partition_name} is a regular partition")
         
         if chained_mode:
             if regular_partitions:
-                print(f"[WARNING] 链式分区模式下发现普通分区: {[p[0] for p in regular_partitions]}")
-                print("[WARNING] 这些普通分区将被跳过，因为缺少vbmeta.img")
+                print(f"[WARNING] Found regular partitions in chained partition mode: {[p[0] for p in regular_partitions]}")
+                print("[WARNING] These regular partitions will be skipped due to missing vbmeta.img")
                 partition_images = dict(chained_partitions)
                 regular_partitions = []
             
             if not chained_partitions:
-                print("[ERROR] 链式分区模式下未发现任何链式分区")
+                print("[ERROR] No chained partitions found in chained partition mode")
                 return False
         else:
             if regular_partitions:
                 original_vbmeta = os.path.join("vbmeta.img")
                 if not os.path.exists(original_vbmeta):
-                    print("[ERROR] 发现普通分区但缺少vbmeta.img")
-                    print("[提示] 使用 --chained-mode 选项可以只处理链式分区")
+                    print("[ERROR] Found regular partitions but missing vbmeta.img")
+                    print("[TIP] Use --chained-mode option to process only chained partitions")
                     return False
 
         success_count = 0
@@ -511,7 +497,7 @@ class AvbRebuilder:
                 success_count += 1
         
         if regular_partitions and not chained_mode:
-            # 解析原vbmeta信息
+            # Parse original vbmeta information
             original_vbmeta = os.path.join("vbmeta.img")
             vbmeta_info = self.parser.parse_image_info(self.avbtool_path, original_vbmeta)
             
@@ -522,40 +508,39 @@ class AvbRebuilder:
             if regular_partitions:
                 regular_partition_dict = dict(regular_partitions)
                 if not self.rebuild_vbmeta(backup_dir, regular_partition_dict):
-                    print("[WARNING] vbmeta重建失败，但链式分区可能已成功重建")
+                    print("[WARNING] vbmeta rebuild failed, but chained partitions may have been successfully rebuilt")
         
         if success_count == 0:
-            print("[ERROR] 没有分区重建成功")
+            print("[ERROR] No partitions were successfully rebuilt")
             return False
         
         self.verify_result()
         
-        print(f"\n=== 重建完成 ===")
-        print(f"备份文件位于: {backup_dir}/")
-        print(f"成功重建了 {success_count} 个分区")
+        print(f"\n=== Rebuild completed ===")
+        print(f"Successfully rebuilt {success_count} partitions")
         if chained_mode:
-            print("链式分区模式: 仅处理了独立验证的分区")
+            print("Chained partition mode: Only processed independently verified partitions")
         elif regular_partitions:
-            print("vbmeta.img生成成功")
+            print("vbmeta.img generated successfully")
         return True
 
 def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(description='AVB通用智能重建脚本')
+    """Main function"""
+    parser = argparse.ArgumentParser(description='AVB Universal Intelligent Rebuild Script')
     parser.add_argument('--partitions', '-p', nargs='+', 
-                       help='指定要重建的分区列表，如: boot init_boot vendor_boot')
+                       help='Specify list of partitions to rebuild, e.g.: boot init_boot vendor_boot')
     parser.add_argument('--working-dir', '-w', 
-                       help='工作目录路径')
+                       help='Working directory path')
     parser.add_argument('--avbtool', '-a', 
-                       help='avbtool.py文件路径')
+                       help='avbtool.py file path')
     parser.add_argument('--private-key', '-k', 
-                       help='私钥文件路径（不指定则自动检测）')
+                       help='Private key file path (auto-detect if not specified)')
     parser.add_argument('--regenerate-salt', '-r', action='store_true',
-                       help='重新生成salt而不使用原有的salt')
+                       help='Regenerate salt instead of using original salt')
     parser.add_argument('--verify-only', '-v', action='store_true',
-                       help='仅验证现有镜像，不进行重建')
+                       help='Only verify existing images, do not rebuild')
     parser.add_argument('--chained-mode', '-c', action='store_true',
-                       help='链式分区模式，允许跳过vbmeta.img（仅处理有独立签名的分区）')
+                       help='Chained partition mode, allow skipping vbmeta.img (only process independently signed partitions)')
     
     args = parser.parse_args()
     
@@ -568,9 +553,9 @@ def main():
     vbmeta_required = True
     if args.chained_mode:
         vbmeta_required = False
-        print("[INFO] 链式分区模式已启用，将跳过vbmeta.img检查")
+        print("[INFO] Chained partition mode enabled, will skip vbmeta.img check")
     elif not args.verify_only:
-        # 非链式模式且非仅验证模式，需要vbmeta.img
+        # Non-chained mode and not verify-only mode, requires vbmeta.img
         if not os.path.exists("vbmeta.img"):
             missing_files.append("vbmeta.img")
     
@@ -589,12 +574,12 @@ def main():
                     break
         
         if not has_partition_images:
-            missing_files.append("分区镜像文件 (如 boot.img)")
+            missing_files.append("partition image files (e.g. boot.img)")
     
     if missing_files and not args.verify_only:
-        print(f"[ERROR] 缺少必要文件: {', '.join(missing_files)}")
+        print(f"[ERROR] Missing required files: {', '.join(missing_files)}")
         if not args.chained_mode and "vbmeta.img" in missing_files:
-            print("[INFO] 如果只处理链式分区，可以使用 --chained-mode 选项跳过vbmeta.img")
+            print("[INFO] Use --chained-mode option to skip vbmeta.img if only processing chained partitions")
         return False
     
     rebuilder = AvbRebuilder(working_dir, avbtool_path, args.private_key)
