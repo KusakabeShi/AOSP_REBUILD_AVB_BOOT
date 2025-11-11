@@ -141,7 +141,6 @@ if [ "$DRY_RUN" = false ]; then
     # Determine mode based on vbmeta existence and partition types
     if [ "$vbmeta_exists" = true ] && [ -n "$partitions" ]; then
         # Regular mode: vbmeta exists and we have standard partitions
-        rebuild_params="--partitions$partitions"
         echo "  → Using regular mode with vbmeta.img"
     elif [ "$has_init_boot" = true ] && [ "$vbmeta_exists" = false ]; then
         # Error: init_boot requires vbmeta.img
@@ -160,7 +159,7 @@ if [ "$DRY_RUN" = false ]; then
         echo "  → Using chained mode (other partitions)"
     fi
 else
-    rebuild_params="--partitions <auto-detected>"
+    rebuild_params=""
 fi
 
 echo "Using rebuild_avb parameters: $rebuild_params"
