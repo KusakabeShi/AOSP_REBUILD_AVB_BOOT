@@ -8,6 +8,7 @@ B_SUFFIX=_b
 # Parse command line arguments
 CURRENT_SLOT=""
 TARGET_SLOT=""
+MODE="ota"
 DRY_RUN=false
 FORCE_FLASH=false
 
@@ -17,8 +18,8 @@ while [ $# -gt 0 ]; do
             TARGET_SLOT="$2"
             shift 2
             ;;
-        --current-slot)
-            CURRENT_SLOT="$2"
+        --mode)
+            MODE="$2"
             shift 2
             ;;
         --dry-run)
@@ -30,9 +31,9 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         *)
-            echo "Usage: $0 [--slot a|b] [--current-slot a|b] [--dry-run] [--force-flash]"
-            echo "  --slot        : Target slot to flash (a or b), defaults to inactive slot"
-            echo "  --current-slot: Current active slot for auto-detection, auto-detect if not provided"
+            echo "Usage: $0 [--slot a|b] [--mode ota|current] [--dry-run] [--force-flash]"
+            echo "  --slot        : Target slot to flash (a or b), overrides mode"
+            echo "  --mode        : Flash mode - 'ota' (other slot, default) or 'current' (current slot)"
             echo "  --dry-run     : Show what would be flashed without actually flashing"
             echo "  --force-flash : Flash without confirmation"
             exit 1
@@ -75,12 +76,8 @@ for img in $signed_images; do
 done
 echo ""
 
-# Detect current slot if not provided
+# Detect current slot
 detect_current_slot() {
-    if [ -n "$CURRENT_SLOT" ]; then
-        echo "Using manually specified current slot: $CURRENT_SLOT"
-        return 0
-    fi
     
     # Try to detect current slot
     if [ -f "/proc/cmdline" ]; then
@@ -118,16 +115,34 @@ detect_current_slot() {
     fi
 }
 
-# Determine target slot (same as current slot by default)
+# Determine target slot based on mode
 determine_target_slot() {
     if [ -n "$TARGET_SLOT" ]; then
-        echo "Using manually specified target slot: $TARGET_SLOT"
+        echo "Using manually specified target slot: $TARGET_SLOT (overrides mode)"
         return 0
     fi
     
-    # Default to same slot (restore to current slot)
-    TARGET_SLOT="$CURRENT_SLOT"
-    echo "Target slot: $TARGET_SLOT (same as current slot - restore mode)"
+    # Validate mode parameter
+    if [ "$MODE" != "ota" ] && [ "$MODE" != "current" ]; then
+        echo "ERROR: Invalid mode: $MODE"
+        echo "Mode must be 'ota' or 'current'"
+        exit 1
+    fi
+    
+    # Determine target slot based on mode
+    if [ "$MODE" = "ota" ]; then
+        # OTA mode: flash to other slot
+        if [ "$CURRENT_SLOT" = "a" ]; then
+            TARGET_SLOT="b"
+        else
+            TARGET_SLOT="a"
+        fi
+        echo "Target slot: $TARGET_SLOT (OTA mode - other slot)"
+    else
+        # Current mode: flash to current slot
+        TARGET_SLOT="$CURRENT_SLOT"
+        echo "Target slot: $TARGET_SLOT (current mode - same slot)"
+    fi
 }
 
 detect_current_slot
@@ -146,6 +161,7 @@ echo "========================================"
 echo "FLASH CONFIGURATION"
 echo "========================================"
 echo "Current active slot: $CURRENT_SLOT"
+echo "Flash mode: $MODE"
 echo "Target slot: $TARGET_SLOT"
 echo ""
 
