@@ -201,11 +201,11 @@ for suffix in $A_SUFFIX $B_SUFFIX; do
         
         echo "Checking signature for ${partition}${suffix}..."
         
-        if ! python3 tools/avbtool.py verify_image --image "$backup_img" >/dev/null 2>&1; then
-            echo "  ERROR: Invalid signature for ${partition}${suffix}"
-            signature_valid=false
+        if sh verify_single_img.sh "$backup_img" --silent; then
+            echo "  OK: Valid signature/hash for ${partition}${suffix}"
         else
-            echo "  OK: Valid signature for ${partition}${suffix}"
+            echo "  ERROR: Invalid signature/hash for ${partition}${suffix}"
+            signature_valid=false
         fi
     done
 done

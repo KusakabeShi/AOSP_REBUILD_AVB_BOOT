@@ -248,7 +248,7 @@ echo "========================================"
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN: Would verify signed images in $SIGNED_PATH"
     for partition in $BOOT $INIT $META; do
-        echo "  python3 tools/avbtool.py verify_image --image $SIGNED_PATH/${partition}.img"
+        echo "  sh verify_single_img.sh $SIGNED_PATH/${partition}.img"
     done
 else
     echo "Verifying signed images..."
@@ -258,7 +258,8 @@ else
         signed_file="$SIGNED_PATH/$file"
         if [ -f "$signed_file" ]; then
             echo "Verifying $file..."
-            if python3 tools/avbtool.py verify_image --image "$signed_file" >/dev/null 2>&1; then
+            
+            if sh verify_single_img.sh "$signed_file" --silent; then
                 echo "  ✓ $file verification passed"
             else
                 echo "  ERROR: $file verification failed!"

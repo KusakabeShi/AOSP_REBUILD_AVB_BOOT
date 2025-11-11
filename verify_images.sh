@@ -30,34 +30,32 @@ verify_slot() {
     cp $IMG_DIR/boot${suffix}.img boot.img
     cp $IMG_DIR/init_boot${suffix}.img init_boot.img
 
-    # Verify vbmeta signature (root of trust) with chain partition support
+    # Verify all images using unified verification script
     echo "  Verifying vbmeta signature..."
-    if ! tools/avbtool.py verify_image --image vbmeta.img --key $KEY_FILE --follow_chain_partitions; then
+    if ! sh verify_single_img.sh vbmeta.img --silent; then
         echo "Error: vbmeta${suffix} verification failed!"
         exit 1
     fi
 
-    # Verify boot image signature
     echo "  Verifying boot signature..."
-    if ! tools/avbtool.py verify_image --image boot.img --key $KEY_FILE; then
+    if ! sh verify_single_img.sh boot.img --silent; then
         echo "Error: boot${suffix} verification failed!"
         exit 1
     fi
 
-    # Verify init_boot hash (no signature, hash-only)
     echo "  Verifying init_boot hash..."
-    if ! tools/avbtool.py verify_image --image init_boot.img; then
+    if ! sh verify_single_img.sh init_boot.img --silent; then
         echo "Error: init_boot${suffix} verification failed!"
         exit 1
     fi
 
     # Verify hash chain: vbmeta -> boot/init_boot hashes
     echo "  Verifying boot hash against vbmeta..."
-    if ! tools/avbtool.py calculate_vbmeta_digest --image boot.img --hash_algorithm sha256 --output $TMP_DIR/boot_hash${suffix}.txt; then
+    if ! python3 tools/avbtool.py calculate_vbmeta_digest --image boot.img --hash_algorithm sha256 --output $TMP_DIR/boot_hash${suffix}.txt; then
         echo "Error: boot${suffix} hash calculation failed!"
         exit 1
     fi
-    if ! tools/avbtool.py calculate_vbmeta_digest --image init_boot.img --hash_algorithm sha256 --output $TMP_DIR/init_hash${suffix}.txt; then
+    if ! python3 tools/avbtool.py calculate_vbmeta_digest --image init_boot.img --hash_algorithm sha256 --output $TMP_DIR/init_hash${suffix}.txt; then
         echo "Error: init_boot${suffix} hash calculation failed!"
         exit 1
     fi
