@@ -2614,7 +2614,7 @@ class Avb(object):
       key_blob_in_vbmeta = vbmeta_blob[key_offset:key_offset
                                        + header.public_key_size]
       if key_blob != key_blob_in_vbmeta:
-        raise AvbError('Embedded public key does not match given key.')
+        raise AvbError(f'Embedded public key { key_blob.hex() } does not match given key { key_blob_in_vbmeta.hex() }.')
 
     if footer:
       print('vbmeta: Successfully verified footer and {} vbmeta struct in {}'
@@ -2634,18 +2634,26 @@ class Avb(object):
               'and KEY (which has sha1 {}) not specified'
               .format(desc.partition_name, desc.rollback_index_location,
                       hashlib.sha1(desc.public_key).hexdigest()))
-      elif not desc.verify(image_dir, image_ext, expected_chain_partitions_map,
-                           image, accept_zeroed_hashtree):
-        raise AvbError('Error verifying descriptor.')
+      else:
+        try:
+          verify_result = desc.verify(image_dir, image_ext, expected_chain_partitions_map,image, accept_zeroed_hashtree)
+        except FileNotFoundError as e:
+          print(str(e), "skipping...")
+          continue
+        if not verify_result:
+          raise AvbError('Error verifying descriptor.')
       # Honor --follow_chain_partitions - add '--' to make the output more
       # readable.
-      if (isinstance(desc, AvbChainPartitionDescriptor)
-          and follow_chain_partitions):
+      if (isinstance(desc, AvbChainPartitionDescriptor) and follow_chain_partitions):
         print('--')
         chained_image_filename = os.path.join(image_dir,
                                               desc.partition_name + image_ext)
-        self.verify_image(chained_image_filename, key_path, None, False,
+        try:
+          self.verify_image(chained_image_filename, key_path, None, False,
                           accept_zeroed_hashtree)
+        except FileNotFoundError as e:
+          print(str(e), "skipping...")
+          continue
 
   def print_partition_digests(self, image_filename, output, as_json):
     """Implements the 'print_partition_digests' command.

@@ -11,11 +11,11 @@ PYTHON_EXECUTABLE = sys.executable or "python3"
 
 
 class AvbImageParser:
-    """解析AVB镜像信息的类"""
+    """AVB image information parser class"""
     
     @staticmethod
     def run_command(cmd, description="", capture_output=True):
-        """执行命令并返回结果"""
+        """Execute command and return result"""
         if description:
             print(f"[INFO] {description}")
         print(f"[CMD] {' '.join(cmd)}")
@@ -26,16 +26,16 @@ class AvbImageParser:
                 print(f"[OUTPUT]\n{result.stdout}")
             return result
         except subprocess.CalledProcessError as e:
-            print(f"[ERROR] 命令执行失败: {e}")
+            print(f"[ERROR] Command execution failed: {e}")
             if e.stderr:
-                print(f"[ERROR] 错误输出: {e.stderr}")
+                print(f"[ERROR] Error output: {e.stderr}")
             return None
 
     @staticmethod
     def parse_image_info(avbtool_path, image_path):
-        """解析镜像信息并返回结构化数据"""
+        """Parse image information and return structured data"""
         cmd = [PYTHON_EXECUTABLE, avbtool_path, "info_image", "--image", image_path]
-        result = AvbImageParser.run_command(cmd, f"解析 {image_path} 信息")
+        result = AvbImageParser.run_command(cmd, f"Parsing {image_path} information")
         
         if not result or not result.stdout:
             return None
@@ -56,13 +56,13 @@ class AvbImageParser:
     
     @staticmethod
     def _extract_pattern(text, pattern):
-        """提取匹配的模式"""
+        """Extract matching pattern"""
         match = re.search(pattern, text)
         return match.group(1) if match else None
     
     @staticmethod
     def _parse_descriptors(output):
-        """解析描述符信息"""
+        """Parse descriptor information"""
         descriptors = []
         
         descriptor_blocks = re.split(r'    (Hash descriptor|Hashtree descriptor|Chain Partition descriptor|Prop):', output)
@@ -92,7 +92,7 @@ class AvbImageParser:
     
     @staticmethod
     def _parse_hash_descriptor(content):
-        """解析Hash描述符"""
+        """Parse Hash descriptor"""
         return {
             'image_size': AvbImageParser._extract_pattern(content, r'Image Size:\s+(\d+) bytes'),
             'hash_algorithm': AvbImageParser._extract_pattern(content, r'Hash Algorithm:\s+(\S+)'),
@@ -104,7 +104,7 @@ class AvbImageParser:
     
     @staticmethod
     def _parse_hashtree_descriptor(content):
-        """解析Hashtree描述符"""
+        """Parse Hashtree descriptor"""
         return {
             'image_size': AvbImageParser._extract_pattern(content, r'Image Size:\s+(\d+) bytes'),
             'hash_algorithm': AvbImageParser._extract_pattern(content, r'Hash Algorithm:\s+(\S+)'),
@@ -141,7 +141,7 @@ class AvbImageParser:
         return {}
 
 class AvbRebuilder:
-    """AVB重建器类"""
+    """AVB Rebuilder class"""
     
     def __init__(self, working_dir=None, avbtool_path=None, private_key=None):
         self.working_dir = working_dir or os.getcwd()
@@ -149,22 +149,22 @@ class AvbRebuilder:
         self.parser = AvbImageParser()
         
         os.chdir(self.working_dir)
-        print(f"当前工作目录: {os.getcwd()}")
+        print(f"Current working directory: {os.getcwd()}")
         
         if private_key:
-            # 如果是相对路径，转换为绝对路径并标准化路径分隔符
+            # If relative path, convert to absolute path and normalize path separators
             if not os.path.isabs(private_key):
                 self.private_key = os.path.normpath(os.path.join(self.working_dir, private_key))
             else:
                 self.private_key = os.path.normpath(private_key)
             self.available_keys = [self.private_key]  
-            print(f"[INFO] 使用手动指定的私钥: {self.private_key}")
+            print(f"[INFO] Using manually specified private key: {self.private_key}")
         else:
             self.available_keys = self.auto_detect_private_key()
             self.private_key = None 
     
     def auto_detect_private_key(self):
-        """自动检测可用的私钥文件"""
+        """Auto-detect available private key files"""
         key_candidates = [
             "tools/pem/testkey_rsa4096.pem",
             "tools/pem/testkey_rsa2048.pem", 
@@ -176,50 +176,50 @@ class AvbRebuilder:
             absolute_key_path = os.path.normpath(os.path.join(self.working_dir, key_path))
             if os.path.exists(absolute_key_path):
                 available_keys.append(absolute_key_path)
-                print(f"[检测] 发现私钥: {absolute_key_path}")
+                print(f"[DETECT] Found private key: {absolute_key_path}")
             else:
-                print(f"[检测] 未找到私钥: {absolute_key_path}")
+                print(f"[DETECT] Private key not found: {absolute_key_path}")
         
         if not available_keys:
-            print("[ERROR] 未找到任何私钥文件")
-            print("[ERROR] 请确保以下位置存在私钥文件:")
+            print("[ERROR] No private key files found")
+            print("[ERROR] Please ensure private key files exist at:")
             print("  - tools/pem/testkey_rsa4096.pem")
             print("  - tools/pem/testkey_rsa2048.pem")
             sys.exit(1)
         return available_keys
     
     def detect_required_key_type(self, algorithm):
-        """根据算法检测需要的私钥类型"""
+        """Detect required private key type based on algorithm"""
         if algorithm in ["SHA256_RSA4096", "SHA512_RSA4096"]:
             return "4096"
         elif algorithm in ["SHA256_RSA2048", "SHA512_RSA2048"]:
             return "2048"
         else:
-            print(f"[ERROR] 不支持的算法: {algorithm}")
+            print(f"[ERROR] Unsupported algorithm: {algorithm}")
             sys.exit(1)
     
     def get_key_for_algorithm(self, algorithm):
-        """根据算法获取合适的私钥"""
+        """Get suitable private key based on algorithm"""
         required_type = self.detect_required_key_type(algorithm)
         if self.private_key:
-            print(f"[INFO] 使用手动指定的私钥: {self.private_key}")
+            print(f"[INFO] Using manually specified private key: {self.private_key}")
             return self.private_key
         
         for key_path in self.available_keys:
             if f"rsa{required_type}" in key_path:
-                print(f"[INFO] 算法 {algorithm} 使用私钥: {key_path}")
+                print(f"[INFO] Algorithm {algorithm} using private key: {key_path}")
                 return key_path
         
-        print(f"[ERROR] 未找到匹配算法 {algorithm} 的私钥")
+        print(f"[ERROR] No private key found matching algorithm {algorithm}")
         sys.exit(1)
     
     def create_backup(self):
-        """创建备份"""
+        """Create backup"""
         backup_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_dir = f"backup_{backup_time}"
         os.makedirs(backup_dir, exist_ok=True)
         
-        print(f"\n=== 创建备份: {backup_dir} ===")
+        print(f"\n=== Creating backup: {backup_dir} ===")
         
         files_to_backup = []
         for file in os.listdir('.'):
@@ -242,12 +242,12 @@ class AvbRebuilder:
             img_file = f"{partition}.img"
             if os.path.exists(img_file):
                 partition_images[partition] = img_file
-                print(f"[检测] 发现分区镜像: {partition} -> {img_file}")
+                print(f"[DETECT] Found partition image: {partition} -> {img_file}")
         return partition_images
     
     def rebuild_partition(self, partition_name, image_path, vbmeta_info, use_original_salt=True):
-        """重建单个分区"""
-        print(f"\n=== 重建分区: {partition_name} ===")
+        """Rebuild single partition"""
+        print(f"\n=== Rebuilding partition: {partition_name} ===")
         
         current_info = self.parser.parse_image_info(self.avbtool_path, image_path)
         
@@ -260,7 +260,7 @@ class AvbRebuilder:
                 is_chained_partition = True
                 chain_algorithm = current_info['algorithm']
                 chain_rollback_index = current_info.get('rollback_index', '0')
-                print(f"[INFO] 检测到链式分区，算法: {chain_algorithm}, 回滚索引: {chain_rollback_index}")
+                print(f"[INFO] Detected chained partition, algorithm: {chain_algorithm}, rollback index: {chain_rollback_index}")
         
         if current_info and current_info.get('image_size'):
             partition_size = int(current_info['image_size'])
