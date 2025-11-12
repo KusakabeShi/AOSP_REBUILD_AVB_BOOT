@@ -167,10 +167,6 @@ dump_partition() {
     
     echo "Dumping ${partition}${suffix}..."
     
-    if [ "$DRY_RUN" = true ]; then
-        echo "  DRY RUN: Would dump $partition_path to $output_file"
-        return 0
-    fi
     
     if dd if="$partition_path" of="$output_file" bs=4096 2>/dev/null; then
         echo "  ✓ Successfully dumped ${partition}${suffix} to $output_file"
@@ -187,36 +183,24 @@ dump_failed=false
 
 for partition in $BOOT $INIT $META; do
     if dump_partition "$partition" "$target_suffix"; then
-        if [ "$DRY_RUN" = false ]; then
-            dumped_files="$dumped_files ${partition}.img"
-        fi
+        dumped_files="$dumped_files ${partition}.img"
     else
         echo "Warning: Could not dump ${partition}${target_suffix}"
     fi
 done
 
-if [ "$DRY_RUN" = false ] && [ -z "$dumped_files" ]; then
+if [ -z "$dumped_files" ]; then
     echo "ERROR: No partitions were successfully dumped"
     exit 1
 fi
 
 echo ""
-if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN: Would have dumped target partitions:"
-    for partition in $BOOT $INIT $META; do
-        partition_path="$BLOCK_PATH/${partition}${target_suffix}"
-        if [ -b "$partition_path" ]; then
-            echo "  ✓ ${partition}.img"
-        fi
-    done
-else
-    echo "Successfully dumped partitions:"
-    for file in $dumped_files; do
-        if [ -f "$file" ]; then
-            echo "  ✓ $file"
-        fi
-    done
-fi
+echo "Successfully dumped partitions:"
+for file in $dumped_files; do
+    if [ -f "$file" ]; then
+        echo "  ✓ $file"
+    fi
+done
 
 echo ""
 echo "========================================"
@@ -226,24 +210,19 @@ echo "Checking if partitions are already properly signed..."
 
 # Check if images are already signed
 all_already_signed=true
-if [ "$DRY_RUN" = false ]; then
-    for file in $dumped_files; do
-        if [ -f "$file" ]; then
-            echo "Verifying $file..."
-            if sh verify_single_img.sh "$file" --silent; then
-                echo "  ✓ $file is already properly signed"
-            else
-                echo "  → $file needs re-signing"
-                all_already_signed=false
-            fi
+for file in $dumped_files; do
+    if [ -f "$file" ]; then
+        echo "Verifying $file..."
+        if sh verify_single_img.sh "$file" --silent; then
+            echo "  ✓ $file is already properly signed"
+        else
+            echo "  → $file needs re-signing"
+            all_already_signed=false
         fi
-    done
-else
-    echo "DRY RUN: Would verify signatures of dumped images"
-    all_already_signed=false
-fi
+    fi
+done
 
-if [ "$all_already_signed" = true ] && [ "$DRY_RUN" = false ]; then
+if [ "$all_already_signed" = true ]; then
     echo ""
     echo "✓ All images are already properly signed - no re-signing needed"
     echo ""
@@ -281,100 +260,86 @@ if [ "$skip_signing" = false ]; then
 fi
 
 if [ "$skip_signing" = false ]; then
-    # Determine rebuild_avb parameters (automatically detect partitions)
+    # Determine rebuild_avb parameters
     rebuild_params=""
-    if [ "$DRY_RUN" = false ]; then
-        # Check if vbmeta.img exists
-        vbmeta_exists=false
-        if [ -f "vbmeta.img" ]; then
-            vbmeta_exists=true
-            echo "  ✓ vbmeta.img found - regular mode available"
-        else
-            echo "  ⚠ vbmeta.img not found - chained mode will be used"
-        fi
-        
-        # Auto-detect partitions from dumped files
-        partitions=""
-        has_init_boot=false
-        for file in $dumped_files; do
-            if echo "$file" | grep -q "boot\.img"; then
-                partitions="$partitions boot"
-            elif echo "$file" | grep -q "init_boot\.img"; then
-                partitions="$partitions init_boot"
-                has_init_boot=true
-            fi
-        done
-        
-        # Determine mode based on vbmeta existence and partition types
-        if [ "$vbmeta_exists" = true ] && [ -n "$partitions" ]; then
-            # Regular mode: vbmeta exists and we have standard partitions
-            echo "  → Using regular mode with vbmeta.img"
-        elif [ "$has_init_boot" = true ] && [ "$vbmeta_exists" = false ]; then
-            # Error: init_boot requires vbmeta.img
-            echo ""
-            echo "ERROR: init_boot.img found but vbmeta.img is missing"
-            echo "init_boot partition requires vbmeta.img for proper verification"
-            echo "Please ensure vbmeta.img is present in the current directory"
-            exit 1
-        elif [ -n "$partitions" ] && [ "$vbmeta_exists" = false ]; then
-            # Chained mode: boot partition without vbmeta (assume it's chained)
-            rebuild_params="--chained-mode"
-            echo "  → Using chained mode (boot partition without vbmeta)"
-        else
-            # Fallback to chained mode for other partition types
-            rebuild_params="--chained-mode"
-            echo "  → Using chained mode (other partitions)"
-        fi
+    # Check if vbmeta.img exists
+    vbmeta_exists=false
+    if [ -f "vbmeta.img" ]; then
+        vbmeta_exists=true
+        echo "  ✓ vbmeta.img found - regular mode available"
     else
-        rebuild_params=""
+        echo "  ⚠ vbmeta.img not found - chained mode will be used"
+    fi
+    
+    # Auto-detect partitions from dumped files
+    partitions=""
+    has_init_boot=false
+    for file in $dumped_files; do
+        if echo "$file" | grep -q "boot\.img"; then
+            partitions="$partitions boot"
+        elif echo "$file" | grep -q "init_boot\.img"; then
+            partitions="$partitions init_boot"
+            has_init_boot=true
+        fi
+    done
+    
+    # Determine mode based on vbmeta existence and partition types
+    if [ "$vbmeta_exists" = true ] && [ -n "$partitions" ]; then
+        # Regular mode: vbmeta exists and we have standard partitions
+        echo "  → Using regular mode with vbmeta.img"
+    elif [ "$has_init_boot" = true ] && [ "$vbmeta_exists" = false ]; then
+        # Error: init_boot requires vbmeta.img
+        echo ""
+        echo "ERROR: init_boot.img found but vbmeta.img is missing"
+        echo "init_boot partition requires vbmeta.img for proper verification"
+        echo "Please ensure vbmeta.img is present in the current directory"
+        exit 1
+    elif [ -n "$partitions" ] && [ "$vbmeta_exists" = false ]; then
+        # Chained mode: boot partition without vbmeta (assume it's chained)
+        rebuild_params="--chained-mode"
+        echo "  → Using chained mode (boot partition without vbmeta)"
+    else
+        # Fallback to chained mode for other partition types
+        rebuild_params="--chained-mode"
+        echo "  → Using chained mode (other partitions)"
     fi
     
     echo "Using rebuild_avb parameters: $rebuild_params"
     
-    if [ "$DRY_RUN" = true ]; then
-        echo ""
-        echo "DRY RUN: Would execute the following signing process:"
-        echo "  1. python3 rebuild_avb.py $rebuild_params"
-        echo "  2. Move signed images to $SIGNED_PATH"
-        echo "  3. Verify signed images"
-        echo "  4. Flash signed images back to target slot ($TARGET_SLOT)"
-        echo "  5. Clean up working files"
+    echo "Starting signing process..."
+    echo ""
+    
+    echo "Executing: python3 rebuild_avb.py $rebuild_params"
+    if python3 "rebuild_avb.py" $rebuild_params; then
+        echo "✓ rebuild_avb.py execution completed successfully"
     else
-        echo "Starting signing process..."
-        echo ""
-        
-        echo "Executing: python3 rebuild_avb.py $rebuild_params"
-        if python3 "rebuild_avb.py" $rebuild_params; then
-            echo "✓ rebuild_avb.py execution completed successfully"
-        else
-            echo "ERROR: rebuild_avb.py execution failed"
-            # Clean up dumped files on failure
-            for file in $dumped_files; do
-                rm -f "./$file"
-            done
-            exit 1
-        fi
-        
-        echo ""
-        echo "Moving signed images to output directory..."
-        
-        # Move all .img files to signed directory
-        signed_count=0
+        echo "ERROR: rebuild_avb.py execution failed"
+        # Clean up dumped files on failure
         for file in $dumped_files; do
-            if [ -f "./$file" ]; then
-                mv "./$file" "$SIGNED_PATH/$file"
-                echo "  ✓ Moved $file to $SIGNED_PATH/"
-                signed_count=$((signed_count + 1))
-            else
-                echo "ERROR: Signed image not found: ./$file"
-                exit 1
-            fi
+            rm -f "./$file"
         done
-        
-        if [ $signed_count -eq 0 ]; then
-            echo "ERROR: No signed images were created"
+        exit 1
+    fi
+    
+    echo ""
+    echo "Moving signed images to output directory..."
+    
+    # Move all .img files to signed directory
+    signed_count=0
+    for file in $dumped_files; do
+        if [ -f "./$file" ]; then
+            mv "./$file" "$SIGNED_PATH/$file"
+            echo "  ✓ Moved $file to $SIGNED_PATH/"
+            signed_count=$((signed_count + 1))
+        else
+            echo "ERROR: Signed image not found: ./$file"
             exit 1
         fi
+    done
+    
+    if [ $signed_count -eq 0 ]; then
+        echo "ERROR: No signed images were created"
+        exit 1
     fi
 fi
 
@@ -383,36 +348,29 @@ echo "========================================"
 echo "SIGNATURE VERIFICATION (POST-RESIGN)"
 echo "========================================"
 
-if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN: Would verify signed images in $SIGNED_PATH"
-    for partition in $BOOT $INIT $META; do
-        echo "  sh verify_single_img.sh $SIGNED_PATH/${partition}.img"
-    done
-else
-    echo "Verifying signed images..."
-    
-    verification_failed=false
-    for file in $dumped_files; do
-        signed_file="$SIGNED_PATH/$file"
-        if [ -f "$signed_file" ]; then
-            echo "Verifying $file..."
-            
-            if sh verify_single_img.sh "$signed_file" --silent; then
-                echo "  ✓ $file verification passed"
-            else
-                echo "  ERROR: $file verification failed!"
-                verification_failed=true
-            fi
+echo "Verifying signed images..."
+
+verification_failed=false
+for file in $dumped_files; do
+    signed_file="$SIGNED_PATH/$file"
+    if [ -f "$signed_file" ]; then
+        echo "Verifying $file..."
+        
+        if sh verify_single_img.sh "$signed_file" --silent; then
+            echo "  ✓ $file verification passed"
+        else
+            echo "  ERROR: $file verification failed!"
+            verification_failed=true
         fi
-    done
-    
-    if [ "$verification_failed" = true ]; then
-        echo "ERROR: One or more image verifications failed!"
-        exit 1
     fi
-    
-    echo "✓ All signed images verified successfully"
+done
+
+if [ "$verification_failed" = true ]; then
+    echo "ERROR: One or more image verifications failed!"
+    exit 1
 fi
+
+echo "✓ All signed images verified successfully"
 
 echo ""
 echo "========================================"
@@ -502,15 +460,16 @@ echo "========================================"
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN COMPLETE"
     echo "========================================"
-    echo "Would have re-signed and flashed target slot ($TARGET_SLOT) partitions:"
-    for partition in $BOOT $INIT $META; do
-        partition_path="$BLOCK_PATH/${partition}${target_suffix}"
-        if [ -b "$partition_path" ]; then
-            echo "  ✓ $partition"
-        fi
+    echo "Successfully dumped and re-signed target slot ($TARGET_SLOT) partitions:"
+    for file in $dumped_files; do
+        partition_name=$(echo "$file" | sed 's/\.img$//')
+        echo "  ✓ $partition_name (dumped and signed)"
     done
     echo ""
+    echo "DRY RUN: Would have flashed to target slot ($TARGET_SLOT)"
     echo "Mode: $MODE (target slot: $TARGET_SLOT)"
+    echo ""
+    echo "Re-run without --dry-run to actually flash the signed images."
 else
     echo "RE-SIGNING COMPLETE"
     echo "========================================"
