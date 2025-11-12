@@ -1,20 +1,8 @@
 # AOSP AVB Boot Toolchain ⚙️
 
-> **Complete Android boot image backup, patch, sign, and flash toolchain**  
-> **Designed for bootloader-locked devices** to maintain root access after OTA updates  
-> **Uses custom signing keys** for AVB verification and supports all major root solutions
-
----
-
-## ✨ Features
-
-- 🔒 **Complete Workflow**: Factory backup → OTA backup → Root patching → Custom key signing → Device flashing
-- 🔐 **Custom Key Signing**: Sign boot images with your own private keys for bootloader verification
-- 🧰 **Built-in Tools**: Repository includes all necessary tools (`rebuild_avb.py`, `avbtool.py`, key generation)
-- 🚀 **Root Solution Support**: Auto-detection and patching with Magisk, APatch, KernelSU (GKI/LKM)
-- 📱 **Device Safety**: Comprehensive backup and restore capabilities with signature verification
-- 📦 **Termux Ready**: Designed to run in Termux environment on Android devices
-- 🔄 **APatch KPM Support**: Special script for re-signing after KernelPatch Module installation
+ **An Android boot image backup, patch, sign, and flash toolchain**  
+ **Designed for bootloader-locked devices** to maintain root access after OTA updates  
+ **Uses custom signing keys** for AVB verification and supports all major root solutions
 
 ---
 
@@ -24,6 +12,8 @@ Install required packages in Termux:
 
 ```bash
 pkg update
+pkg install git
+git clone https://github.com/KusakabeShi/avb_resign_util
 pkg install python openssl-tool
 ```
 
@@ -55,7 +45,7 @@ AOSP_REBUILD_AVB_BOOT/
 ├── 3-1_dump_user_patched.sh # Dump user-patched images from root manager
 ├── 4_sign_patched.sh      # Sign patched images with custom keys
 ├── 5_flash.sh             # Flash signed images to device partitions
-├── 9_resign.sh            # Re-sign partitions (KPM support & general use)
+├── 9_resign.sh            # Re-sign partitions (For KPM installation)
 ├── rebuild_avb.py         # Core AVB rebuilding script
 ├── verify_images.sh       # Image verification utility
 ├── tools/                 # Signing keys, avbtool.py, and utilities
@@ -97,19 +87,29 @@ mkdir -p backups/
 
 **Method B: Temporary Root**
 ```bash
-fastboot boot patched_kernel.img
-# Once booted with root access:
+# temporarily root the GKI kernel
+# Following the instruction at [KernelSU](https://kernelsu.org/guide/installation.html#get-the-official-firmware)
+fastboot boot patched_gki_kernel.img
+
+# or gain temporary root with exploit such as dirtypipe
+```
+
+Once booted with root access:
+```
 ./2_backup_factory.sh
+# it will dump boot_a.img, boot_b.img, init_boot_a.img, init_boot_b.img, vbmeta_a.img, vbmeta_b.img to backups folder
 ```
 
 **Method C: EDL/9008 Mode (Qualcomm)**
 ```bash
 # Use EDL tools (QFIL, MiFlash) to dump partitions directly
+# Dump: boot_a.img, boot_b.img, init_boot_a.img, init_boot_b.img, vbmeta_a.img, vbmeta_b.img
 ```
 
 **Method D: BROM Mode (MediaTek)**
 ```bash
 # Use MTK tools (SP Flash Tool, MTKClient) to dump partitions
+# Dump: boot_a.img, boot_b.img, init_boot_a.img, init_boot_b.img, vbmeta_a.img, vbmeta_b.img
 ```
 
 **Verify backups before proceeding:**
@@ -202,15 +202,7 @@ Method B: Dump user-patched images
 1. Dumps target slot's vbmeta, boot, and init_boot partitions
 2. Checks if already properly signed (skips if already signed)
 3. Signs them with your private key using rebuild_avb.py (if needed)
-4. Flashes back to target slot (with strong confirmation prompts)
-
-## 🆘 Recovery (Both Workflows)
-```bash
-# Restore to factory state anytime if issues occur
-./1_restore_factory.sh
-# Compares current partitions with backups and restores differences
-# Use --dry-run to test, --force-flash to skip confirmations
-```
+4. Flashes back to target slot (with confirmation prompts)
 
 ### 💡 Key Concepts for Bootloader-Locked Devices
 
@@ -280,15 +272,6 @@ Method B: Dump user-patched images
 - **Must be used on devices that accept custom signing keys** (custom ROMs, development devices)
 - Tested on devices using custom key signatures after bootloader relock
 - **Will NOT work on stock OEM devices** with hardware-enforced signature verification
-
-### Safety Features
-- Comprehensive backup system with verification
-- **Three-mode safety pattern**: `--dry-run` (test), `--force-*` (skip confirmations), or manual confirmation
-- Multiple confirmation prompts for destructive operations (type 'YES' to confirm)
-- Automatic slot detection and management
-- Hash verification and signature checking
-- **Automatic cleanup** of temporary files after each script execution
-- **Smart OTA detection** prevents unnecessary operations
 
 ---
 
