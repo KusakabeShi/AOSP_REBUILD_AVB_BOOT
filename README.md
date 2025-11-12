@@ -55,7 +55,7 @@ AOSP_REBUILD_AVB_BOOT/
 ├── 3-1_dump_user_patched.sh # Dump user-patched images from root manager
 ├── 4_sign_patched.sh      # Sign patched images with custom keys
 ├── 5_flash.sh             # Flash signed images to device partitions
-├── 9_resign_current.sh    # Re-sign current partitions (APatch KPM support)
+├── 9_resign.sh            # Re-sign partitions (KPM support & general use)
 ├── rebuild_avb.py         # Core AVB rebuilding script
 ├── verify_images.sh       # Image verification utility
 ├── tools/                 # Signing keys, avbtool.py, and utilities
@@ -165,30 +165,39 @@ Method B: Dump user-patched images
 **Step 6: Flash signed images**
 ```bash
 ./5_flash.sh
-# Flashes to inactive slot, maintaining A/B partition integrity
+# Default: OTA mode - flashes to inactive slot, maintaining A/B partition integrity
+# Options: --mode current (flash to current slot) or --slot a/b (explicit slot)
 ```
 
-## 🔌 Workflow 2: KPM Installation Process (Script 9)
-**Use when**: Installing APatch KernelPatch Modules (KPM) that modify running kernel
+## 🔌 Workflow 2: Partition Re-signing (Script 9)
+**Use when**: Installing APatch KernelPatch Modules (KPM) or general partition re-signing
 
-**Re-sign current running partitions:**
+**Re-sign partitions:**
 ```bash
-./9_resign_current.sh
+./9_resign.sh
+# Default: current mode - re-signs current running partitions (KPM use case)
 ```
 
 **With options:**
 ```bash
 # Test without actual changes
-./9_resign_current.sh --dry-run
+./9_resign.sh --dry-run
 
-# Skip confirmation prompts
-./9_resign_current.sh --force-flash
+# Skip confirmation prompts  
+./9_resign.sh --force-flash
+
+# OTA mode - re-sign other slot
+./9_resign.sh --mode ota
+
+# Explicit slot selection
+./9_resign.sh --slot a
 ```
 
 **This script automatically:**
-1. Dumps current vbmeta, boot, and init_boot partitions from active slot
-2. Signs them with your private key using rebuild_avb.py
-3. Flashes back to current slot (with strong confirmation prompts)
+1. Dumps target slot's vbmeta, boot, and init_boot partitions
+2. Checks if already properly signed (skips if already signed)
+3. Signs them with your private key using rebuild_avb.py (if needed)
+4. Flashes back to target slot (with strong confirmation prompts)
 
 ## 🆘 Recovery (Both Workflows)
 ```bash
@@ -238,13 +247,15 @@ Method B: Dump user-patched images
 ### `5_flash.sh`
 - **Purpose**: Flash signed images to device partitions
 - **Features**: Safety confirmations, size validation, slot management, cleanup
-- **Usage**: `./5_flash.sh [--slot a|b] [--dry-run] [--force-flash]`
+- **Usage**: `./5_flash.sh [--slot a|b] [--mode ota|current] [--dry-run] [--force-flash]`
+- **Default**: OTA mode (flash to inactive slot)
 
-### `9_resign_current.sh` 🆕
-- **Purpose**: Re-sign currently running partitions (APatch KPM support)
-- **Features**: Current partition dumping, signing, flashing with confirmations
-- **Usage**: `./9_resign_current.sh [--dry-run] [--force-flash]`
-- **Use Case**: After installing APatch Kernel Patch Modules that modify the running kernel
+### `9_resign.sh` 🆕
+- **Purpose**: Re-sign partitions with custom keys (KPM support & general use)
+- **Features**: Pre-verification, auto-skip if signed, partition dumping, signing, flashing
+- **Usage**: `./9_resign.sh [--slot a|b] [--mode ota|current] [--dry-run] [--force-flash]`
+- **Default**: Current mode (re-sign current running partitions for KPM use case)
+- **Smart Skip**: Exits early if partitions are already properly signed
 
 ---
 
