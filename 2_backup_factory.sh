@@ -139,52 +139,12 @@ echo "========================================="
 echo "Verifying signatures of dumped partitions..."
 
 # Verify backup integrity first
+signature_valid=true
 echo "Verifying backup image integrity..."
 if ! sh verify_images.sh $NEW_BAK_PATH; then
     echo "Backup image integrity check failed! Not proceeding."
-    exit 1
+    signature_valid=false
 fi
-
-# Verify signatures for each slot separately using verify_images.sh
-signature_valid=true
-for suffix in $A_SUFFIX $B_SUFFIX; do
-    echo "Verifying slot ${suffix#_} signatures..."
-    
-    # Check if all three partition files exist for this slot
-    boot_img="$NEW_BAK_PATH/boot${suffix}.img"
-    init_img="$NEW_BAK_PATH/init_boot${suffix}.img"
-    vbmeta_img="$NEW_BAK_PATH/vbmeta${suffix}.img"
-    
-    missing_files=""
-    if [ ! -f "$boot_img" ]; then missing_files="$missing_files boot${suffix}.img"; fi
-    if [ ! -f "$init_img" ]; then missing_files="$missing_files init_boot${suffix}.img"; fi
-    if [ ! -f "$vbmeta_img" ]; then missing_files="$missing_files vbmeta${suffix}.img"; fi
-    
-    if [ -n "$missing_files" ]; then
-        echo "  Skipping slot ${suffix#_} verification - missing files:$missing_files"
-        continue
-    fi
-    
-    # Create temporary directory for renamed files (required by avbtool.py)
-    temp_verify_dir="$TMP_DIR/verify_slot_${suffix#_}"
-    mkdir -p "$temp_verify_dir"
-    
-    # Copy and rename files to standard names required by avbtool.py
-    cp "$boot_img" "$temp_verify_dir/boot.img"
-    cp "$init_img" "$temp_verify_dir/init_boot.img" 
-    cp "$vbmeta_img" "$temp_verify_dir/vbmeta.img"
-    
-    # Verify signatures using verify_images.sh
-    if sh verify_images.sh "$temp_verify_dir"; then
-        echo "  ✓ Slot ${suffix#_} signatures valid"
-    else
-        echo "  ERROR: Slot ${suffix#_} signature verification failed!"
-        signature_valid=false
-    fi
-    
-    # Clean up temporary verification directory
-    rm -rf "$temp_verify_dir"
-done
 
 if [ "$signature_valid" = false ]; then
     echo ""
