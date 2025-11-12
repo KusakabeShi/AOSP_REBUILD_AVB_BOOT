@@ -38,23 +38,14 @@ done
 mkdir -p $TMP_DIR
 mkdir -p $NEW_BAK_PATH
 
-# Function to calculate hash of partition
-calculate_partition_hash() {
-    local partition_path=$1
-    local output_file=$2
-    
-    if [ ! -b "$partition_path" ]; then
-        echo "Error: Partition $partition_path does not exist!"
-        exit 1
-    fi
-    
-    # Get partition size and calculate hash
-    partition_size=$(blockdev --getsize64 "$partition_path")
-    dd if="$partition_path" bs=4096 count=$((partition_size/4096)) 2>/dev/null | sha256sum | cut -d' ' -f1 > "$output_file"
-}
+echo "========================================"
+echo "POST-OTA BACKUP CREATOR"
+echo "========================================"
+echo "Dumping all 6 partitions and comparing with existing backups..."
+echo ""
 
-# Function to backup single partition
-backup_partition() {
+# Function to dump partition
+dump_partition() {
     local partition=$1
     local suffix=$2
     local partition_path="$BLOCK_PATH/${partition}${suffix}"
@@ -62,74 +53,75 @@ backup_partition() {
     
     if [ ! -b "$partition_path" ]; then
         echo "Warning: Partition $partition_path does not exist, skipping..."
+        return 1
+    fi
+    
+    echo "Dumping ${partition}${suffix}..."
+    
+    if dd if="$partition_path" of="$backup_img" bs=4096 2>/dev/null; then
+        echo "  ✓ Successfully dumped ${partition}${suffix}"
         return 0
-    fi
-    
-    echo "Backing up ${partition}${suffix}..."
-    
-    if [ "$DRY_RUN" = true ]; then
-        echo "  DRY RUN: Would backup $partition_path to $backup_img"
-        return 0
-    fi
-    
-    if [ "$FORCE_BACKUP" = false ]; then
-        echo -n "Backup $partition_path to $backup_img? (y/N): "
-        read -r response
-        case $response in
-            [yY]|[yY][eE][sS])
-                ;;
-            *)
-                echo "  Skipped backing up ${partition}${suffix}"
-                return 0
-                ;;
-        esac
-    fi
-    
-    if dd if="$partition_path" of="$backup_img" bs=4096; then
-        echo "  Successfully backed up ${partition}${suffix}"
     else
-        echo "Error: Failed to backup ${partition}${suffix}"
-        exit 1
+        echo "  ERROR: Failed to dump ${partition}${suffix}"
+        return 1
     fi
 }
 
-echo "Checking for changes in partitions..."
+# Step 1: Dump all 6 partitions to new_backups
+echo "========================================="
+echo "DUMPING PARTITIONS"
+echo "========================================="
 
-# Check if original backups exist
+dumped_count=0
+for suffix in $A_SUFFIX $B_SUFFIX; do
+    for partition in $BOOT $INIT $META; do
+        if dump_partition "$partition" "$suffix"; then
+            dumped_count=$((dumped_count + 1))
+        fi
+    done
+done
+
+if [ $dumped_count -eq 0 ]; then
+    echo "ERROR: No partitions were successfully dumped"
+    exit 1
+fi
+
+echo ""
+echo "Successfully dumped $dumped_count partition(s)"
+
+# Step 2: Compare 6 file hashes between backups (if exist, else skip)
+echo ""
+echo "========================================="
+echo "COMPARING WITH EXISTING BACKUPS"
+echo "========================================="
+
 changes_detected=false
 if [ ! -d "$IMG_BAK_PATH" ]; then
-    echo "No original backups found. This appears to be the first backup."
+    echo "No existing backups found. This appears to be the first backup."
     changes_detected=true
 else
-    echo "Comparing current partitions with original backups..."
+    echo "Comparing dumped partitions with existing backups..."
     
-    # Calculate hashes for current partitions and compare with original backups
     for suffix in $A_SUFFIX $B_SUFFIX; do
         for partition in $BOOT $INIT $META; do
-            partition_path="$BLOCK_PATH/${partition}${suffix}"
-            backup_img="$IMG_BAK_PATH/${partition}${suffix}.img"
-            current_hash_file="$TMP_DIR/current_${partition}${suffix}.hash"
-            backup_hash_file="$TMP_DIR/backup_${partition}${suffix}.hash"
+            new_img="$NEW_BAK_PATH/${partition}${suffix}.img"
+            old_img="$IMG_BAK_PATH/${partition}${suffix}.img"
             
-            if [ ! -b "$partition_path" ]; then
-                echo "Warning: Partition $partition_path does not exist, skipping..."
+            if [ ! -f "$new_img" ]; then
                 continue
             fi
             
-            if [ ! -f "$backup_img" ]; then
-                echo "  ${partition}${suffix}: Original backup missing, change detected"
+            if [ ! -f "$old_img" ]; then
+                echo "  ${partition}${suffix}: No existing backup, change detected"
                 changes_detected=true
                 continue
             fi
             
-            # Calculate current partition hash
-            calculate_partition_hash "$partition_path" "$current_hash_file"
+            # Compare file hashes
+            new_hash=$(sha256sum "$new_img" | cut -d' ' -f1)
+            old_hash=$(sha256sum "$old_img" | cut -d' ' -f1)
             
-            # Calculate original backup hash
-            sha256sum "$backup_img" | cut -d' ' -f1 > "$backup_hash_file"
-            
-            # Compare hashes
-            if cmp -s "$current_hash_file" "$backup_hash_file"; then
+            if [ "$new_hash" = "$old_hash" ]; then
                 echo "  ${partition}${suffix}: No changes detected"
             else
                 echo "  ${partition}${suffix}: Changes detected"
@@ -139,75 +131,59 @@ else
     done
 fi
 
+# Step 3: Verify signatures
 echo ""
 echo "========================================="
-echo "BACKUP DECISION SUMMARY"  
+echo "SIGNATURE VERIFICATION"
 echo "========================================="
+echo "Verifying signatures of dumped partitions..."
 
-if [ "$changes_detected" = false ]; then
-    echo "No changes detected in any partition."
-    echo ""
-    echo "========================================="
-    echo "WARNING: OTA UPDATE MAY NOT BE COMPLETE"
-    echo "========================================="
-    echo "This usually means:"
-    echo "  1. OTA update has not been applied yet"
-    echo "  2. OTA update made no changes to boot/init_boot/vbmeta partitions"
-    echo ""
-    echo "RECOMMENDATION:"
-    echo "Please ensure OTA update is properly completed before proceeding."
-    echo "If OTA is truly complete, you can patch with existing backups."
-    echo ""
-    echo "Backup operation cancelled - no new backup needed."
-    echo "========================================="
-    exit 0
-else
-    echo "Changes detected in partitions - OTA update appears to be applied!"
-    echo "Now dumping partitions and verifying signatures..."
-fi
-
-# Perform backup of all partitions
-echo ""
-echo "Backing up current partitions..."
-for suffix in $A_SUFFIX $B_SUFFIX; do
-    for partition in $BOOT $INIT $META; do
-        backup_partition "$partition" "$suffix"
-    done
-done
-
-# Verify new backup images integrity
-echo ""
+# Verify backup integrity first
 echo "Verifying backup image integrity..."
 if ! sh verify_images.sh $NEW_BAK_PATH; then
     echo "Backup image integrity check failed! Not proceeding."
     exit 1
 fi
 
-# Verify signatures of the new partitions
-echo ""
-echo "========================================="
-echo "SIGNATURE VERIFICATION"
-echo "========================================="
-echo "Verifying signatures of post-OTA partitions..."
-
+# Verify signatures for each slot separately using verify_images.sh
 signature_valid=true
 for suffix in $A_SUFFIX $B_SUFFIX; do
-    for partition in $BOOT $INIT $META; do
-        backup_img="$NEW_BAK_PATH/${partition}${suffix}.img"
-        
-        if [ ! -f "$backup_img" ]; then
-            continue
-        fi
-        
-        echo "Checking signature for ${partition}${suffix}..."
-        
-        if sh verify_single_img.sh "$backup_img" --silent; then
-            echo "  OK: Valid signature/hash for ${partition}${suffix}"
-        else
-            echo "  ERROR: Invalid signature/hash for ${partition}${suffix}"
-            signature_valid=false
-        fi
-    done
+    echo "Verifying slot ${suffix#_} signatures..."
+    
+    # Check if all three partition files exist for this slot
+    boot_img="$NEW_BAK_PATH/boot${suffix}.img"
+    init_img="$NEW_BAK_PATH/init_boot${suffix}.img"
+    vbmeta_img="$NEW_BAK_PATH/vbmeta${suffix}.img"
+    
+    missing_files=""
+    if [ ! -f "$boot_img" ]; then missing_files="$missing_files boot${suffix}.img"; fi
+    if [ ! -f "$init_img" ]; then missing_files="$missing_files init_boot${suffix}.img"; fi
+    if [ ! -f "$vbmeta_img" ]; then missing_files="$missing_files vbmeta${suffix}.img"; fi
+    
+    if [ -n "$missing_files" ]; then
+        echo "  Skipping slot ${suffix#_} verification - missing files:$missing_files"
+        continue
+    fi
+    
+    # Create temporary directory for renamed files (required by avbtool.py)
+    temp_verify_dir="$TMP_DIR/verify_slot_${suffix#_}"
+    mkdir -p "$temp_verify_dir"
+    
+    # Copy and rename files to standard names required by avbtool.py
+    cp "$boot_img" "$temp_verify_dir/boot.img"
+    cp "$init_img" "$temp_verify_dir/init_boot.img" 
+    cp "$vbmeta_img" "$temp_verify_dir/vbmeta.img"
+    
+    # Verify signatures using verify_images.sh
+    if sh verify_images.sh "$temp_verify_dir"; then
+        echo "  ✓ Slot ${suffix#_} signatures valid"
+    else
+        echo "  ERROR: Slot ${suffix#_} signature verification failed!"
+        signature_valid=false
+    fi
+    
+    # Clean up temporary verification directory
+    rm -rf "$temp_verify_dir"
 done
 
 if [ "$signature_valid" = false ]; then
@@ -236,7 +212,41 @@ fi
 echo ""
 echo "All signatures verified successfully!"
 
-# Backup safety control: dry-run skips, force-backup proceeds, otherwise ask
+# Step 4: Hint user about changed partitions
+echo ""
+echo "========================================="
+echo "BACKUP DECISION SUMMARY"  
+echo "========================================="
+
+if [ "$changes_detected" = false ]; then
+    echo "No changes detected in any partition."
+    echo ""
+    echo "========================================="
+    echo "WARNING: OTA UPDATE MAY NOT BE COMPLETE"
+    echo "========================================="
+    echo "This usually means:"
+    echo "  1. OTA update has not been applied yet"
+    echo "  2. OTA update made no changes to boot/init_boot/vbmeta partitions"
+    echo ""
+    echo "RECOMMENDATION:"
+    echo "Please ensure OTA update is properly completed before proceeding."
+    echo "If OTA is truly complete, you can patch with existing backups."
+    echo ""
+    echo "Backup operation cancelled - no new backup needed."
+    echo "========================================="
+    exit 0
+else
+    echo "Changes detected in partitions - OTA update appears to be applied!"
+    echo "New backup contains verified post-OTA images."
+fi
+
+# Step 5: Overwrite to original backups folder (dangerous part)
+echo ""
+echo "========================================="
+echo "INSTALL NEW BACKUP"
+echo "========================================="
+
+# Installation safety control: dry-run skips, force-backup proceeds, otherwise ask
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN: Skipping backup replacement operation"
     echo ""
@@ -338,7 +348,7 @@ else
     echo "✓ No temporary files to clean up"
 fi
 
-# Clean up new backup directory if it still exists (dry run or failure cases)
+# Clean up new backup directory if it still exists (dry run cases only)
 if [ -d "$NEW_BAK_PATH" ] && [ "$DRY_RUN" = true ]; then
     rm -rf "$NEW_BAK_PATH"
     echo "✓ Dry run backup directory cleaned up"
