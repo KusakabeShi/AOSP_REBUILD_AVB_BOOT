@@ -96,9 +96,11 @@ echo "COMPARING WITH EXISTING BACKUPS"
 echo "========================================="
 
 changes_detected=false
+changed_partitions=""
 if [ ! -d "$IMG_BAK_PATH" ]; then
     echo "No existing backups found. This appears to be the first backup."
     changes_detected=true
+    changed_partitions="All partitions (first backup)"
 else
     echo "Comparing dumped partitions with existing backups..."
     
@@ -114,6 +116,7 @@ else
             if [ ! -f "$old_img" ]; then
                 echo "  ${partition}${suffix}: No existing backup, change detected"
                 changes_detected=true
+                changed_partitions="$changed_partitions ${partition}${suffix}"
                 continue
             fi
             
@@ -126,6 +129,7 @@ else
             else
                 echo "  ${partition}${suffix}: Changes detected"
                 changes_detected=true
+                changed_partitions="$changed_partitions ${partition}${suffix}"
             fi
         done
     done
@@ -197,6 +201,7 @@ if [ "$changes_detected" = false ]; then
     exit 0
 else
     echo "Changes detected in partitions - OTA update appears to be applied!"
+    echo "Changed partitions:$changed_partitions"
     echo "New backup contains verified post-OTA images."
 fi
 
@@ -308,10 +313,10 @@ else
     echo "✓ No temporary files to clean up"
 fi
 
-# Clean up new backup directory if it still exists (dry run cases only)
-if [ -d "$NEW_BAK_PATH" ] && [ "$DRY_RUN" = true ]; then
+# Clean up new backup directory if it still exists
+if [ -d "$NEW_BAK_PATH" ]; then
     rm -rf "$NEW_BAK_PATH"
-    echo "✓ Dry run backup directory cleaned up"
+    echo "✓ New backup directory cleaned up"
 fi
 
 # Clean up any temporary image files in project root
