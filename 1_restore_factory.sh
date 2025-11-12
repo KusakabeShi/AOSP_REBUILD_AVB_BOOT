@@ -200,13 +200,41 @@ if [ $total_different -gt 0 ]; then
     echo "Different partitions:$different_partitions"
     echo ""
     
+    # Flash safety control: dry-run skips, force-flash proceeds, otherwise ask
     if [ "$DRY_RUN" = true ]; then
-        echo "DRY RUN mode: No actual flashing will be performed."
+        echo "DRY RUN: Skipping flash operation"
+        echo ""
+        echo "Would flash the following partitions:"
         for partition_name in $different_partitions; do
-            echo "  Would flash: $IMG_BAK_PATH/${partition_name}.img -> $BLOCK_PATH/${partition_name}"
+            echo "  $IMG_BAK_PATH/${partition_name}.img -> $BLOCK_PATH/${partition_name}"
+        done
+        echo ""
+        echo "Re-run without --dry-run to actually flash these partitions."
+    elif [ "$FORCE_FLASH" = true ]; then
+        echo "FORCE FLASH: Proceeding without confirmation"
+        for partition_name in $different_partitions; do
+            flash_single_partition "$partition_name"
         done
     else
-        echo "Proceeding with flashing different partitions..."
+        echo "About to flash factory images to restore clean state"
+        echo ""
+        echo "WARNING: This will overwrite current partitions with factory images!"
+        echo "This operation is intended to restore clean state for OTA installation."
+        echo ""
+        echo "Partitions to flash:"
+        for partition_name in $different_partitions; do
+            echo "  $IMG_BAK_PATH/${partition_name}.img -> $BLOCK_PATH/${partition_name}"
+        done
+        echo ""
+        echo -n "Are you absolutely sure you want to continue? (type 'YES' to confirm): "
+        read -r response
+        if [ "$response" != "YES" ]; then
+            echo "Flash operation cancelled for safety"
+            echo ""
+            echo "Current partitions remain unchanged."
+            exit 0
+        fi
+        echo "Proceeding with factory restore..."
         for partition_name in $different_partitions; do
             flash_single_partition "$partition_name"
         done

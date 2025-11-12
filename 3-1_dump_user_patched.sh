@@ -187,12 +187,6 @@ dump_partition() {
     
     echo "Dumping ${partition}${suffix}..."
     
-    if [ "$DRY_RUN" = true ]; then
-        echo "  DRY RUN: Would dump $partition_path to $output_file"
-        echo "  DRY RUN: Would check if patched by comparing with backup"
-        return 0
-    fi
-    
     if dd if="$partition_path" of="$output_file" bs=4096 2>/dev/null; then
         echo "  ✓ Successfully dumped ${partition}${suffix} to $output_file"
         
@@ -212,26 +206,42 @@ dump_partition() {
 
 target_suffix="_${TARGET_SLOT}"
 
-# Confirmation prompt
-if [ "$FORCE_DUMP" = false ] && [ "$DRY_RUN" = false ]; then
+# Dumping safety control: dry-run skips, force-dump proceeds, otherwise ask  
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Skipping partition dump operation"
+    echo ""
+    echo "Would dump the following from slot $TARGET_SLOT:"
+    if [ -n "$SPECIFIC_PARTITION" ]; then
+        echo "  $SPECIFIC_PARTITION partition only"
+    else
+        echo "  boot, init_boot, vbmeta partitions"
+    fi
+    echo ""
+    echo "Re-run without --dry-run to actually dump these partitions."
+    exit 0
+elif [ "$FORCE_DUMP" = true ]; then
+    echo "FORCE DUMP: Proceeding without confirmation"
+else
     echo "About to dump user-patched images from slot $TARGET_SLOT"
+    echo ""
+    echo "WARNING: This will access device partitions directly!"
+    echo "This operation will read data from live device partitions."
+    echo ""
     if [ -n "$SPECIFIC_PARTITION" ]; then
         echo "Will dump: $SPECIFIC_PARTITION only"
     else
         echo "Will dump: boot, init_boot, vbmeta"
     fi
     echo ""
-    echo -n "Continue with dumping? (y/N): "
+    echo -n "Are you absolutely sure you want to continue? (type 'YES' to confirm): "
     read -r response
-    case $response in
-        [yY]|[yY][eE][sS])
-            echo "Proceeding with dump..."
-            ;;
-        *)
-            echo "Dumping cancelled by user"
-            exit 0
-            ;;
-    esac
+    if [ "$response" != "YES" ]; then
+        echo "Dump operation cancelled for safety"
+        echo ""
+        echo "No partitions were accessed."
+        exit 0
+    fi
+    echo "Proceeding with dump..."
 fi
 
 echo ""

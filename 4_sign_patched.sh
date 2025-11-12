@@ -29,8 +29,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Create directories
-mkdir -p "$SIGNED_PATH"
+# Create temp directory (signed path will be handled later with safety checks)
 mkdir -p "$TMP_DIR"
 
 echo "========================================"
@@ -68,22 +67,8 @@ done
 echo "✓ rebuild_avb.py: rebuild_avb.py"
 echo ""
 
-# Confirmation prompt
-if [ "$FORCE_SIGN" = false ] && [ "$DRY_RUN" = false ]; then
-    echo "About to sign all patched images with rebuild_avb.py"
-    echo "Images will be copied to current directory, signed, then moved to $SIGNED_PATH"
-    echo -n "Continue with signing? (y/N): "
-    read -r response
-    case $response in
-        [yY]|[yY][eE][sS])
-            echo "Proceeding with signing..."
-            ;;
-        *)
-            echo "Signing cancelled by user"
-            exit 0
-            ;;
-    esac
-fi
+# Always proceed with signing (not dangerous)
+echo "Starting signing process..."
 
 echo ""
 echo "========================================"
@@ -164,30 +149,82 @@ fi
 
 echo "Using rebuild_avb parameters: $rebuild_params"
 
-if [ "$DRY_RUN" = true ]; then
-    echo ""
-    echo "DRY RUN: Would execute the following signing process:"
-    echo "  1. python3 rebuild_avb.py $rebuild_params"
-    echo "  2. Move signed images to $SIGNED_PATH"
-    echo "  3. Verify signed images"
-    echo "  4. Clean up working files"
+echo "Executing: python3 rebuild_avb.py $rebuild_params"
+if python3 "rebuild_avb.py" $rebuild_params; then
+    echo "✓ rebuild_avb.py execution completed successfully"
 else
-    echo "Starting signing process..."
+    echo "ERROR: rebuild_avb.py execution failed"
+    # Clean up copied files on failure
+    for file in $copied_files; do
+        rm -f "./$file"
+    done
+    exit 1
+fi
+
+# Check if signed directory exists and has content
+existing_signed_files=""
+if [ -d "$SIGNED_PATH" ]; then
+    existing_signed_files=$(find "$SIGNED_PATH" -name "*.img" 2>/dev/null)
+fi
+
+echo ""
+echo "========================================"
+echo "INSTALL SIGNED IMAGES"
+echo "========================================"
+
+# Installation safety control: dry-run skips, force-sign proceeds, otherwise ask
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Skipping installation to $SIGNED_PATH"
     echo ""
-    
-    echo "Executing: python3 rebuild_avb.py $rebuild_params"
-    if python3 "rebuild_avb.py" $rebuild_params; then
-        echo "✓ rebuild_avb.py execution completed successfully"
-    else
-        echo "ERROR: rebuild_avb.py execution failed"
-        # Clean up copied files on failure
-        for file in $copied_files; do
-            rm -f "./$file"
+    echo "Signed images are ready in current directory:"
+    for file in $copied_files; do
+        if [ -f "./$file" ]; then
+            echo "  ✓ $file"
+        fi
+    done
+    echo ""
+    if [ -n "$existing_signed_files" ]; then
+        echo "Would overwrite existing signed images:"
+        for file in $existing_signed_files; do
+            echo "  ⚠ $(basename "$file")"
         done
-        exit 1
+        echo ""
     fi
-    
+    echo "Re-run without --dry-run to install these images to $SIGNED_PATH."
+elif [ "$FORCE_SIGN" = true ]; then
+    echo "FORCE SIGN: Installing without confirmation"
+    mkdir -p "$SIGNED_PATH"
+else
+    echo "About to install signed images to $SIGNED_PATH"
     echo ""
+    if [ -n "$existing_signed_files" ]; then
+        echo "WARNING: This will overwrite existing signed images!"
+        echo "Existing signed images:"
+        for file in $existing_signed_files; do
+            echo "  ⚠ $(basename "$file")"
+        fi
+        echo ""
+    fi
+    echo "New signed images to install:"
+    for file in $copied_files; do
+        if [ -f "./$file" ]; then
+            echo "  ✓ $file"
+        fi
+    done
+    echo ""
+    echo -n "Are you absolutely sure you want to continue? (type 'YES' to confirm): "
+    read -r response
+    if [ "$response" != "YES" ]; then
+        echo "Installation cancelled for safety"
+        echo ""
+        echo "Signed images remain in current directory for manual review."
+        exit 0
+    fi
+    echo "Proceeding with installation..."
+    mkdir -p "$SIGNED_PATH"
+fi
+
+if [ "$DRY_RUN" = false ]; then
     echo "Moving signed images to output directory..."
     
     # Move all .img files to signed directory
@@ -214,57 +251,68 @@ echo "========================================"
 echo "SIGNATURE VERIFICATION"
 echo "========================================"
 
-if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN: Would verify signed images in $SIGNED_PATH:"
-    for img in $patched_images; do
-        filename=$(basename "$img")
-        echo "  sh verify_single_img.sh $SIGNED_PATH/$filename"
-    done
-else
-    echo "Verifying signed images..."
-    
-    verification_failed=false
-    for file in $copied_files; do
+echo "Verifying signed images..."
+
+verification_failed=false
+for file in $copied_files; do
+    if [ "$DRY_RUN" = true ]; then
+        # In dry-run, verify images in current directory
+        signed_file="./$file"
+    else
+        # In normal mode, verify images in signed directory
         signed_file="$SIGNED_PATH/$file"
-        if [ -f "$signed_file" ]; then
-            echo "Verifying $file..."
-            
-            if sh verify_single_img.sh "$signed_file" --silent; then
-                echo "  ✓ $file verification passed"
-            else
-                echo "  ERROR: $file verification failed!"
-                verification_failed=true
-            fi
-        fi
-    done
-    
-    if [ "$verification_failed" = true ]; then
-        echo "ERROR: One or more image verifications failed!"
-        exit 1
     fi
     
-    echo "✓ All signed images verified successfully"
+    if [ -f "$signed_file" ]; then
+        echo "Verifying $file..."
+        
+        if sh verify_single_img.sh "$signed_file" --silent; then
+            echo "  ✓ $file verification passed"
+        else
+            echo "  ERROR: $file verification failed!"
+            verification_failed=true
+        fi
+    fi
+done
+
+if [ "$verification_failed" = true ]; then
+    echo "ERROR: One or more image verifications failed!"
+    exit 1
+fi
+    
+echo "✓ All signed images verified successfully"
+
+# Clean up temporary files in current directory if dry-run (since they won't be moved)
+if [ "$DRY_RUN" = true ]; then
+    echo ""
+    echo "Cleaning up temporary signed images..."
+    for file in $copied_files; do
+        if [ -f "./$file" ]; then
+            rm -f "./$file"
+            echo "✓ Cleaned up temporary signed image: $file"
+        fi
+    done
 fi
 
 echo ""
 echo "========================================"
 if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN COMPLETE"
+    echo "OPERATION COMPLETE (DRY RUN)"
     echo "========================================"
-    echo "Would have created signed images in $SIGNED_PATH:"
-    for img in $patched_images; do
-        filename=$(basename "$img")
-        echo "  ✓ $filename"
-    done
+    echo "✓ Successfully signed all patched images"
+    echo "✓ Signatures verified"
+    echo "✓ Temporary files cleaned up"
+    echo ""
+    echo "Installation to $SIGNED_PATH was skipped (dry-run mode)"
+    echo ""
+    echo "NEXT STEPS:"
+    echo "Re-run without --dry-run to install signed images to $SIGNED_PATH."
 else
     echo "SIGNING COMPLETE"
     echo "========================================"
-    echo "Successfully created and verified signed images in $SIGNED_PATH:"
-    for file in $copied_files; do
-        if [ -f "$SIGNED_PATH/$file" ]; then
-            echo "  ✓ $file"
-        fi
-    done
+    echo "✓ Successfully signed all patched images"
+    echo "✓ Images installed in $SIGNED_PATH"
+    echo "✓ Signatures verified"
     echo ""
     echo "NEXT STEPS:"
     echo "1. Use './5_flash.sh' to flash these signed images to your device"

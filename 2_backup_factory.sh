@@ -236,9 +236,23 @@ fi
 echo ""
 echo "All signatures verified successfully!"
 
-# Replace original backups with new ones
-if [ "$DRY_RUN" = false ]; then
-    echo "Signature verification passed. Replacing original backups..."
+# Backup safety control: dry-run skips, force-backup proceeds, otherwise ask
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Skipping backup replacement operation"
+    echo ""
+    echo "New verified backups are ready in $NEW_BAK_PATH:"
+    for suffix in $A_SUFFIX $B_SUFFIX; do
+        for partition in $BOOT $INIT $META; do
+            backup_img="$NEW_BAK_PATH/${partition}${suffix}.img"
+            if [ -f "$backup_img" ]; then
+                echo "  ✓ ${partition}${suffix}.img"
+            fi
+        done
+    done
+    echo ""
+    echo "Re-run without --dry-run to replace current backups."
+elif [ "$FORCE_BACKUP" = true ]; then
+    echo "FORCE BACKUP: Proceeding without confirmation"
     
     # Backup old backups if they exist
     if [ -d "$IMG_BAK_PATH" ]; then
@@ -247,38 +261,71 @@ if [ "$DRY_RUN" = false ]; then
     
     # Move new backups to original location
     mv "$NEW_BAK_PATH" "$IMG_BAK_PATH"
-    
+else
+    echo "About to replace current backup images with new post-OTA backups"
     echo ""
+    if [ -d "$IMG_BAK_PATH" ]; then
+        echo "WARNING: This will overwrite your current backup images!"
+        echo "Current backups will be moved to ${IMG_BAK_PATH}.old.$(date +%Y%m%d_%H%M%S)"
+    else
+        echo "INFO: No existing backups found - creating initial backup."
+    fi
+    echo ""
+    echo "New backups to install:"
+    for suffix in $A_SUFFIX $B_SUFFIX; do
+        for partition in $BOOT $INIT $META; do
+            backup_img="$NEW_BAK_PATH/${partition}${suffix}.img"
+            if [ -f "$backup_img" ]; then
+                echo "  ✓ ${partition}${suffix}.img"
+            fi
+        done
+    done
+    echo ""
+    echo -n "Are you absolutely sure you want to continue? (type 'YES' to confirm): "
+    read -r response
+    if [ "$response" != "YES" ]; then
+        echo "Backup operation cancelled for safety"
+        echo ""
+        echo "New backups remain available in $NEW_BAK_PATH for manual review."
+        exit 0
+    fi
+    echo "Proceeding with backup replacement..."
+    
+    # Backup old backups if they exist
+    if [ -d "$IMG_BAK_PATH" ]; then
+        mv "$IMG_BAK_PATH" "${IMG_BAK_PATH}.old.$(date +%Y%m%d_%H%M%S)"
+    fi
+    
+    # Move new backups to original location
+    mv "$NEW_BAK_PATH" "$IMG_BAK_PATH"
+fi
+
+echo ""
+echo "========================================="
+if [ "$DRY_RUN" = true ]; then
+    echo "OPERATION COMPLETE (DRY RUN)"
     echo "========================================="
+    echo "✓ OTA changes detected and verified"
+    echo "✓ Signatures validated"  
+    echo "✓ New backup created in $NEW_BAK_PATH"
+    echo ""
+    echo "Backup replacement was skipped (dry-run mode)"
+    echo ""
+    echo "NEXT STEPS:"
+    echo "Re-run without --dry-run to install the new backups."
+else
     echo "SUCCESS - POST-OTA BACKUP COMPLETE"
     echo "========================================="
     echo "✓ OTA changes detected and verified"
     echo "✓ Signatures validated"
-    echo "✓ New backup created successfully"
+    echo "✓ New backup installed successfully"
     echo ""
     echo "NEXT STEPS:"
     echo "You can now safely proceed to patch with:"
     echo "  • Magisk/KernelSU/APatch/SukiSU"
     echo "  • Run './3_patch.sh' to apply patches"
     echo "  • Use './1_restore_factory.sh' to restore anytime"
-    echo "========================================="
-else
-    echo "DRY RUN: Would replace original backups with signature-verified new backups."
-    echo ""
-    echo "========================================="
-    echo "DRY RUN - BACKUP WOULD BE COMPLETE"
-    echo "========================================="
-    echo "✓ OTA changes would be detected and verified"
-    echo "✓ Signatures would be validated"  
-    echo "✓ New backup would be created successfully"
-    echo ""
-    echo "NEXT STEPS (after actual backup):"
-    echo "You can safely proceed to patch with:"
-    echo "  • Magisk/KernelSU/APatch/SukiSU"
-    echo "  • Run './3_patch.sh' to apply patches" 
-    echo "  • Use './1_restore_factory.sh' to restore anytime"
-    echo "========================================"
-fi
+echo "========================================"
 
 # Cleanup temporary files
 echo ""

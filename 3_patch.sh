@@ -383,9 +383,29 @@ boot_patched="$PATCHED_PATH/boot.img"
 init_patched="$PATCHED_PATH/init_boot.img"
 vbmeta_patched="$PATCHED_PATH/vbmeta.img"
 
-# Ask for confirmation unless force patch is enabled
-if [ "$FORCE_PATCH" = false ] && [ "$DRY_RUN" = false ]; then
+# Patching safety control: dry-run skips, force-patch proceeds, otherwise ask
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Skipping patching operation"
+    echo ""
+    echo "Would patch the following images with $ROOT_SOLUTION:"
+    if [ "$patch_boot" = true ]; then
+        echo "  Would create: $boot_patched"
+    fi
+    if [ "$patch_init" = true ]; then
+        echo "  Would create: $init_patched"
+    fi
+    echo "  Would copy: $vbmeta_patched"
+    echo ""
+    echo "Re-run without --dry-run to actually patch these images."
+    exit 0
+elif [ "$FORCE_PATCH" = true ]; then
+    echo "FORCE PATCH: Proceeding without confirmation"
+else
     echo "About to patch images with $ROOT_SOLUTION for target slot $TARGET_SLOT"
+    echo ""
+    echo "WARNING: This will execute $ROOT_SOLUTION patching commands!"
+    echo "This operation will modify boot images with root solution code."
+    echo ""
     echo "Source: slot $TARGET_SLOT backup images"
     echo "Output files:"
     if [ "$patch_boot" = true ]; then
@@ -396,17 +416,15 @@ if [ "$FORCE_PATCH" = false ] && [ "$DRY_RUN" = false ]; then
     fi
     echo "  Will copy: $vbmeta_patched"
     echo ""
-    echo -n "Continue with patching? (y/N): "
+    echo -n "Are you absolutely sure you want to continue? (type 'YES' to confirm): "
     read -r response
-    case $response in
-        [yY]|[yY][eE][sS])
-            echo "Proceeding with patch..."
-            ;;
-        *)
-            echo "Patching cancelled by user"
-            exit 0
-            ;;
-    esac
+    if [ "$response" != "YES" ]; then
+        echo "Patching operation cancelled for safety"
+        echo ""
+        echo "No images were modified."
+        exit 0
+    fi
+    echo "Proceeding with patching..."
 fi
 
 echo ""

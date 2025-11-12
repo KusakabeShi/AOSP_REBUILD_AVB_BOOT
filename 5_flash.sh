@@ -238,8 +238,23 @@ fi
 
 echo "✓ Size validation passed"
 
-# Final confirmation
-if [ "$FORCE_FLASH" = false ] && [ "$DRY_RUN" = false ]; then
+# Flash safety control: dry-run skips, force-flash proceeds, otherwise ask
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Skipping flash operation"
+    echo ""
+    echo "Would flash the following images:"
+    for entry in $flash_list; do
+        image_file=$(echo "$entry" | cut -d: -f1)
+        partition_path=$(echo "$entry" | cut -d: -f2)
+        echo "  $(basename "$image_file") -> $partition_path"
+    done
+    echo ""
+    echo "Re-run without --dry-run to actually flash these images."
+    skip_flash=true
+elif [ "$FORCE_FLASH" = true ]; then
+    echo "FORCE FLASH: Proceeding without confirmation"
+    skip_flash=false
+else
     echo ""
     echo "========================================"
     echo "CRITICAL WARNING"
@@ -264,24 +279,22 @@ if [ "$FORCE_FLASH" = false ] && [ "$DRY_RUN" = false ]; then
         exit 0
     fi
     echo "Proceeding with flash..."
+    skip_flash=false
 fi
 
-echo ""
-echo "========================================"
-echo "FLASHING PROCESS"
-echo "========================================"
+# Flash images (if not skipped)
+if [ "$skip_flash" = false ]; then
+    echo ""
+    echo "========================================"
+    echo "FLASHING PROCESS"
+    echo "========================================"
 
-# Flash images
-flash_image() {
-    local source_image=$1
-    local target_partition=$2
-    local partition_name=$3
-    
-    echo "Flashing $partition_name..."
-    
-    if [ "$DRY_RUN" = true ]; then
-        echo "  DRY RUN: Would execute: dd if=$source_image of=$target_partition bs=4096"
-    else
+    flash_image() {
+        local source_image=$1
+        local target_partition=$2
+        local partition_name=$3
+        
+        echo "Flashing $partition_name..."
         echo "  Executing: dd if=$source_image of=$target_partition bs=4096"
         if dd if="$source_image" of="$target_partition" bs=4096 2>/dev/null; then
             echo "  ✓ Successfully flashed $partition_name"
@@ -289,37 +302,42 @@ flash_image() {
             echo "  ERROR: Failed to flash $partition_name"
             return 1
         fi
-    fi
-}
+    }
 
-# Flash all images
-flash_failed=false
-for entry in $flash_list; do
-    image_file=$(echo "$entry" | cut -d: -f1)
-    partition_path=$(echo "$entry" | cut -d: -f2)
-    partition_name=$(echo "$entry" | cut -d: -f3)
-    
-    if ! flash_image "$image_file" "$partition_path" "$partition_name"; then
-        echo "ERROR: $partition_name flashing failed!"
-        flash_failed=true
-    fi
-done
+    # Flash all images
+    flash_failed=false
+    for entry in $flash_list; do
+        image_file=$(echo "$entry" | cut -d: -f1)
+        partition_path=$(echo "$entry" | cut -d: -f2)
+        partition_name=$(echo "$entry" | cut -d: -f3)
+        
+        if ! flash_image "$image_file" "$partition_path" "$partition_name"; then
+            echo "ERROR: $partition_name flashing failed!"
+            flash_failed=true
+        fi
+    done
 
-if [ "$flash_failed" = true ]; then
-    echo "ERROR: One or more flash operations failed!"
-    exit 1
+    if [ "$flash_failed" = true ]; then
+        echo "ERROR: One or more flash operations failed!"
+        exit 1
+    fi
 fi
 
 echo ""
 echo "========================================"
-if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN COMPLETE"
+if [ "$skip_flash" = true ]; then
+    echo "OPERATION COMPLETE (DRY RUN)"
     echo "========================================"
-    echo "Would have flashed to slot $TARGET_SLOT:"
+    echo "Image validation completed successfully"
+    echo "Flash operation was skipped (dry-run mode)"
+    echo ""
+    echo "Images are ready to flash to slot $TARGET_SLOT:"
     for entry in $flash_list; do
         partition_name=$(echo "$entry" | cut -d: -f3)
         echo "  ✓ $partition_name"
     done
+    echo ""
+    echo "Re-run without --dry-run to flash these images."
 else
     echo "FLASHING COMPLETE"
     echo "========================================"

@@ -377,8 +377,24 @@ echo "========================================"
 echo "FLASH TO TARGET SLOT"
 echo "========================================"
 
-# Flash confirmation
-if [ "$FORCE_FLASH" = false ] && [ "$DRY_RUN" = false ]; then
+# Flash safety control: dry-run skips, force-flash proceeds, otherwise ask
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Skipping flash operation"
+    echo ""
+    echo "Signed images are ready in $SIGNED_PATH:"
+    for file in $dumped_files; do
+        signed_file="$SIGNED_PATH/$file"
+        if [ -f "$signed_file" ]; then
+            echo "  ✓ $file"
+        fi
+    done
+    echo ""
+    echo "Re-run without --dry-run to flash these images to the device."
+    skip_flash=true
+elif [ "$FORCE_FLASH" = true ]; then
+    echo "FORCE FLASH: Proceeding without confirmation"
+    skip_flash=false
+else
     echo "About to flash re-signed images to target slot ($TARGET_SLOT)"
     echo ""
     if [ "$TARGET_SLOT" = "$CURRENT_SLOT" ]; then
@@ -403,9 +419,12 @@ if [ "$FORCE_FLASH" = false ] && [ "$DRY_RUN" = false ]; then
     read -r response
     if [ "$response" != "YES" ]; then
         echo "Flash operation cancelled for safety"
+        echo ""
+        echo "Signed images remain available in $SIGNED_PATH for manual flashing."
         exit 0
     fi
     echo "Proceeding with flash..."
+    skip_flash=false
 fi
 
 # Flash function
@@ -429,36 +448,38 @@ flash_image() {
     fi
 }
 
-# Flash all signed images to target slot
-flash_failed=false
-for file in $dumped_files; do
-    signed_file="$SIGNED_PATH/$file"
-    partition_name=$(echo "$file" | sed 's/\.img$//')
-    partition_path="$BLOCK_PATH/${partition_name}${target_suffix}"
-    
-    if [ "$DRY_RUN" = true ] || [ -f "$signed_file" ]; then
-        if [ "$DRY_RUN" = false ] && [ ! -b "$partition_path" ]; then
-            echo "ERROR: Target partition not found: $partition_path"
-            flash_failed=true
-            continue
-        fi
+# Flash all signed images to target slot (if not skipped)
+if [ "$skip_flash" = false ]; then
+    flash_failed=false
+    for file in $dumped_files; do
+        signed_file="$SIGNED_PATH/$file"
+        partition_name=$(echo "$file" | sed 's/\.img$//')
+        partition_path="$BLOCK_PATH/${partition_name}${target_suffix}"
         
-        if ! flash_image "$signed_file" "$partition_path" "$partition_name"; then
-            echo "ERROR: $partition_name flashing failed!"
-            flash_failed=true
+        if [ -f "$signed_file" ]; then
+            if [ ! -b "$partition_path" ]; then
+                echo "ERROR: Target partition not found: $partition_path"
+                flash_failed=true
+                continue
+            fi
+            
+            if ! flash_image "$signed_file" "$partition_path" "$partition_name"; then
+                echo "ERROR: $partition_name flashing failed!"
+                flash_failed=true
+            fi
         fi
-    fi
-done
+    done
 
-if [ "$flash_failed" = true ]; then
-    echo "ERROR: One or more flash operations failed!"
-    exit 1
+    if [ "$flash_failed" = true ]; then
+        echo "ERROR: One or more flash operations failed!"
+        exit 1
+    fi
 fi
 
 echo ""
 echo "========================================"
-if [ "$DRY_RUN" = true ]; then
-    echo "DRY RUN COMPLETE"
+if [ "$skip_flash" = true ]; then
+    echo "OPERATION COMPLETE (DRY RUN)"
     echo "========================================"
     echo "Successfully dumped and re-signed target slot ($TARGET_SLOT) partitions:"
     for file in $dumped_files; do
@@ -466,12 +487,13 @@ if [ "$DRY_RUN" = true ]; then
         echo "  ✓ $partition_name (dumped and signed)"
     done
     echo ""
-    echo "DRY RUN: Would have flashed to target slot ($TARGET_SLOT)"
+    echo "Flash operation was skipped (dry-run mode)"
     echo "Mode: $MODE (target slot: $TARGET_SLOT)"
     echo ""
-    echo "Re-run without --dry-run to actually flash the signed images."
+    echo "Signed images are ready in $SIGNED_PATH/"
+    echo "Re-run without --dry-run to flash these images to the device."
 else
-    echo "RE-SIGNING COMPLETE"
+    echo "OPERATION COMPLETE"
     echo "========================================"
     echo "Successfully re-signed and flashed target slot ($TARGET_SLOT) partitions:"
     for file in $dumped_files; do
