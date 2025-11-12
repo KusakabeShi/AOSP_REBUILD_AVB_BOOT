@@ -325,6 +325,7 @@ else
     echo "  • Magisk/KernelSU/APatch/SukiSU"
     echo "  • Run './3_patch.sh' to apply patches"
     echo "  • Use './1_restore_factory.sh' to restore anytime"
+fi
 echo "========================================"
 
 # Cleanup temporary files

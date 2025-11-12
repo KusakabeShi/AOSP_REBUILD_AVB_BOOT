@@ -126,6 +126,7 @@ fastboot boot patched_kernel.img
 ./1_restore_factory.sh
 # This restores clean, unsigned images to allow OTA installation
 # REQUIRES factory backups from Step 0!
+# Use --dry-run to test, --force-flash to skip confirmations
 ```
 
 **Step 2: Apply OTA update**
@@ -138,6 +139,7 @@ fastboot boot patched_kernel.img
 ```bash
 ./2_backup_factory.sh
 # Detects OTA changes and creates verified backups of new slot
+# Use --dry-run to test, --force-backup to skip confirmations
 ```
 
 **Step 4: Patch boot images (choose ONE method)**
@@ -147,6 +149,7 @@ Method A: Auto-patch with CLI
 ./3_patch.sh
 # Auto-detects target slot and root solution
 # Patches images from backup, NOT currently running slot
+# Use --dry-run to test, --force-patch to skip confirmations
 ```
 
 Method B: Dump user-patched images
@@ -154,12 +157,14 @@ Method B: Dump user-patched images
 ./3-1_dump_user_patched.sh
 # For when user already patched via root manager
 # Dumps from inactive slot partitions, compares with backup to verify patching
+# Use --dry-run to test, --force-dump to skip confirmations
 ```
 
 **Step 5: Sign patched images**
 ```bash
 ./4_sign_patched.sh
 # Uses rebuild_avb.py to sign with your custom keys
+# Use --dry-run to test, --force-sign to skip confirmations
 ```
 
 **Step 6: Flash signed images**
@@ -204,6 +209,7 @@ Method B: Dump user-patched images
 # Restore to factory state anytime if issues occur
 ./1_restore_factory.sh
 # Compares current partitions with backups and restores differences
+# Use --dry-run to test, --force-flash to skip confirmations
 ```
 
 ### 💡 Key Concepts for Bootloader-Locked Devices
@@ -231,12 +237,12 @@ Method B: Dump user-patched images
 ### `3_patch.sh`
 - **Purpose**: Patch boot images with root solutions
 - **Features**: Auto-detection of root solutions and device slots, cleanup
-- **Usage**: `./3_patch.sh [--slot a|b] [--root magisk|apatch|kernelsu-gki|kernelsu-lkm]`
+- **Usage**: `./3_patch.sh [--slot a|b] [--root magisk|apatch|kernelsu-gki|kernelsu-lkm] [--dry-run] [--force-patch]`
 
 ### `3-1_dump_user_patched.sh` 🆕
 - **Purpose**: Dump user-patched images from root manager (alternative to script 3)
 - **Features**: Dumps from partitions instead of patching, backup comparison verification
-- **Usage**: `./3-1_dump_user_patched.sh [--slot a|b] [--partition boot|init_boot] [--dry-run]`
+- **Usage**: `./3-1_dump_user_patched.sh [--slot a|b] [--current-slot a|b] [--partition boot|init_boot] [--dry-run] [--force-dump]`
 - **Use Case**: When user already patched images through root manager interface
 
 ### `4_sign_patched.sh`
@@ -277,8 +283,8 @@ Method B: Dump user-patched images
 
 ### Safety Features
 - Comprehensive backup system with verification
-- Dry-run modes for all operations  
-- Multiple confirmation prompts for destructive operations
+- **Three-mode safety pattern**: `--dry-run` (test), `--force-*` (skip confirmations), or manual confirmation
+- Multiple confirmation prompts for destructive operations (type 'YES' to confirm)
 - Automatic slot detection and management
 - Hash verification and signature checking
 - **Automatic cleanup** of temporary files after each script execution

@@ -202,7 +202,7 @@ else
         echo "Existing signed images:"
         for file in $existing_signed_files; do
             echo "  ⚠ $(basename "$file")"
-        fi
+        done
         echo ""
     fi
     echo "New signed images to install:"
