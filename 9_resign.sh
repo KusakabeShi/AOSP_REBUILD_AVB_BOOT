@@ -17,6 +17,8 @@ TARGET_SLOT=""
 MODE="current"
 DRY_RUN=false
 FORCE_FLASH=false
+REFERENCE_DIR=""
+REFERENCE_BOOT=""
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -36,12 +38,23 @@ while [ $# -gt 0 ]; do
             FORCE_FLASH=true
             shift
             ;;
+        --reference-dir)
+            REFERENCE_DIR="$2"
+            shift 2
+            ;;
+        --reference-boot)
+            REFERENCE_BOOT="$2"
+            shift 2
+            ;;
         *)
-            echo "Usage: $0 [--slot a|b] [--mode ota|current] [--dry-run] [--force-flash]"
-            echo "  --slot        : Target slot to resign (a or b), overrides mode"
-            echo "  --mode        : Resign mode - 'current' (current slot, default) or 'ota' (other slot)"
-            echo "  --dry-run     : Show what would be done without actually doing it"
-            echo "  --force-flash : Flash without confirmation prompts"
+            echo "Usage: $0 [--slot a|b] [--mode ota|current] [--dry-run] [--force-flash] [--reference-dir DIR] [--reference-boot PATH]"
+            echo "  --slot           : Target slot to resign (a or b), overrides mode"
+            echo "  --mode           : Resign mode - 'current' (current slot, default) or 'ota' (other slot)"
+            echo "  --dry-run        : Show what would be done without actually doing it"
+            echo "  --force-flash    : Flash without confirmation prompts"
+            echo "  --reference-dir  : Dir of factory reference images; each partition sources its AVB"
+            echo "                     params from DIR/<part>.img (sign an unsigned GKI boot like factory)"
+            echo "  --reference-boot : Reference image for boot only (overrides --reference-dir for boot)"
             exit 1
             ;;
     esac
@@ -304,11 +317,22 @@ if [ "$skip_signing" = false ]; then
         echo "  → Using chained mode (other partitions)"
     fi
     
+    # Pass AVB reference images through so an unsigned/different input (e.g. downloaded GKI boot)
+    # gets signed with the factory partition's AVB params (algorithm/salt/size/rollback/props).
+    if [ -n "$REFERENCE_DIR" ]; then
+        rebuild_params="$rebuild_params --reference-dir $REFERENCE_DIR"
+        echo "  → Using reference-dir for AVB params: $REFERENCE_DIR"
+    fi
+    if [ -n "$REFERENCE_BOOT" ]; then
+        rebuild_params="$rebuild_params --reference boot:$REFERENCE_BOOT"
+        echo "  → Using reference boot image for AVB params: $REFERENCE_BOOT"
+    fi
+
     echo "Using rebuild_avb parameters: $rebuild_params"
-    
+
     echo "Starting signing process..."
     echo ""
-    
+
     echo "Executing: python3 rebuild_avb.py $rebuild_params"
     if python3 "rebuild_avb.py" $rebuild_params; then
         echo "✓ rebuild_avb.py execution completed successfully"

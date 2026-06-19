@@ -143,14 +143,22 @@ class AvbImageParser:
 class AvbRebuilder:
     """AVB Rebuilder class"""
     
-    def __init__(self, working_dir=None, avbtool_path=None, private_key=None):
+    def __init__(self, working_dir=None, avbtool_path=None, private_key=None, references=None):
         self.working_dir = working_dir or os.getcwd()
         self.avbtool_path = avbtool_path or os.path.join(self.working_dir, "tools", "avbtool.py")
         self.parser = AvbImageParser()
-        
+        # references: {partition_name: reference_image_path}. When set, the partition's AVB signing
+        # parameters (algorithm/salt/partition_size/rollback/props) are sourced from the reference
+        # (e.g. the factory boot.img) instead of auto-detected from the input image. Needed when the
+        # input is unsigned (e.g. a downloaded GKI boot with Algorithm NONE) but the device expects
+        # it signed/chained exactly like factory.
+        self.references = references or {}
+
         os.chdir(self.working_dir)
         print(f"Current working directory: {os.getcwd()}")
-        
+        if self.references:
+            print(f"[INFO] AVB reference images: {self.references}")
+
         if private_key:
             # If relative path, convert to absolute path and normalize path separators
             if not os.path.isabs(private_key):
@@ -231,44 +239,65 @@ class AvbRebuilder:
                 print(f"[DETECT] Found partition image: {partition} -> {img_file}")
         return partition_images
     
+    def _get_signing_info(self, partition_name, current_info):
+        """Return the AVB params to sign with: from the reference image if one was provided for this
+        partition, otherwise from the input image itself."""
+        ref_path = self.references.get(partition_name)
+        if ref_path:
+            if not os.path.isabs(ref_path):
+                ref_path = os.path.normpath(os.path.join(self.working_dir, ref_path))
+            if os.path.exists(ref_path):
+                ref_info = self.parser.parse_image_info(self.avbtool_path, ref_path)
+                if ref_info:
+                    print(f"[INFO] {partition_name}: sourcing AVB params from reference image "
+                          f"{ref_path} (algorithm={ref_info.get('algorithm')})")
+                    return ref_info
+                print(f"[WARNING] {partition_name}: could not parse reference {ref_path}; "
+                      f"falling back to input image params")
+            else:
+                print(f"[WARNING] {partition_name}: reference image not found: {ref_path}; "
+                      f"falling back to input image params")
+        return current_info
+
     def rebuild_partition(self, partition_name, image_path, vbmeta_info, use_original_salt=True):
         """Rebuild single partition"""
         print(f"\n=== Rebuilding partition: {partition_name} ===")
-        
+
         current_info = self.parser.parse_image_info(self.avbtool_path, image_path)
-        
+        # Signing parameters come from the reference image when provided (e.g. factory boot), so an
+        # unsigned input (downloaded GKI boot, Algorithm NONE) gets signed/chained exactly like
+        # factory instead of being left unsigned.
+        sign_info = self._get_signing_info(partition_name, current_info)
+
         is_chained_partition = False
         chain_algorithm = None
         chain_rollback_index = None
-        
-        if current_info:
-            if current_info.get('algorithm') and current_info['algorithm'] != 'NONE':
+
+        if sign_info:
+            if sign_info.get('algorithm') and sign_info['algorithm'] != 'NONE':
                 is_chained_partition = True
-                chain_algorithm = current_info['algorithm']
-                chain_rollback_index = current_info.get('rollback_index', '0')
-                print(f"[INFO] Detected chained partition, algorithm: {chain_algorithm}, rollback index: {chain_rollback_index}")
-        
-        if current_info and current_info.get('image_size'):
-            partition_size = int(current_info['image_size'])
-            print(f"[INFO] Got partition size from current image: {partition_size} bytes")
+                chain_algorithm = sign_info['algorithm']
+                chain_rollback_index = sign_info.get('rollback_index', '0')
+                print(f"[INFO] Signing as chained partition, algorithm: {chain_algorithm}, rollback index: {chain_rollback_index}")
+
+        if sign_info and sign_info.get('image_size'):
+            partition_size = int(sign_info['image_size'])
+            print(f"[INFO] Partition size: {partition_size} bytes")
         else:
-   
             print(f"[ERROR] Unable to get size information for partition {partition_name}")
             return False
-        
+
+        # Remove any existing footer on the input image before (re)adding ours.
+        cmd = [PYTHON_EXECUTABLE, self.avbtool_path, "erase_footer", "--image", image_path]
+        self.parser.run_command(cmd, f"Erase AVB footer for {partition_name}")
+
         if is_chained_partition:
-            cmd = [PYTHON_EXECUTABLE, self.avbtool_path, "erase_footer", "--image", image_path]
-            self.parser.run_command(cmd, f"Erase AVB footer for {partition_name}")
-            
-            return self._rebuild_chained_partition(partition_name, image_path, partition_size, 
-                                                 chain_algorithm, chain_rollback_index, 
-                                                 current_info, use_original_salt)
+            return self._rebuild_chained_partition(partition_name, image_path, partition_size,
+                                                 chain_algorithm, chain_rollback_index,
+                                                 sign_info, use_original_salt)
         else:
-            cmd = [PYTHON_EXECUTABLE, self.avbtool_path, "erase_footer", "--image", image_path]
-            self.parser.run_command(cmd, f"Erase AVB footer for {partition_name}")
-            
-            return self._rebuild_hash_partition(partition_name, image_path, partition_size, 
-                                              vbmeta_info, current_info, use_original_salt)
+            return self._rebuild_hash_partition(partition_name, image_path, partition_size,
+                                              vbmeta_info, sign_info, use_original_salt)
     
     def _rebuild_chained_partition(self, partition_name, image_path, partition_size, 
                                   algorithm, rollback_index, current_info, use_original_salt):
@@ -466,7 +495,10 @@ class AvbRebuilder:
         
         for partition_name, image_path in partition_images.items():
             current_info = self.parser.parse_image_info(self.avbtool_path, image_path)
-            if current_info and current_info.get('algorithm') and current_info['algorithm'] != 'NONE':
+            # Classify by the reference image's algorithm when a reference is provided, so an
+            # unsigned input (GKI boot) is still treated as chained like its factory reference.
+            sign_info = self._get_signing_info(partition_name, current_info)
+            if sign_info and sign_info.get('algorithm') and sign_info['algorithm'] != 'NONE':
                 chained_partitions.append((partition_name, image_path))
                 print(f"[INFO] {partition_name} is a chained partition")
             else:
@@ -541,8 +573,34 @@ def main():
                        help='Only verify existing images, do not rebuild')
     parser.add_argument('--chained-mode', '-c', action='store_true',
                        help='Chained partition mode, allow skipping vbmeta.img (only process independently signed partitions)')
-    
+    parser.add_argument('--reference', '-R', action='append', metavar='PART:PATH', default=[],
+                       help='Source a partition\'s AVB signing params (algorithm/salt/size/rollback/props) '
+                            'from a reference image instead of the input image. Repeatable. '
+                            'e.g. --reference boot:backup/boot.img  (use when signing an unsigned GKI boot)')
+    parser.add_argument('--reference-dir', '-D', metavar='DIR',
+                       help='Directory of reference images; each rebuilt partition uses DIR/<partition>.img '
+                            'as its AVB reference when present (e.g. your factory backup dir)')
+
     args = parser.parse_args()
+
+    # Build {partition: reference_image} map from --reference-dir then --reference (explicit wins)
+    references = {}
+    if args.reference_dir:
+        # Accept either unsuffixed (boot.img) or slot-suffixed (boot_a.img / boot_b.img) names — the
+        # AVB signing params (algorithm/key/partition_size) are the same for both slots of a given
+        # partition, so any available one works as the reference. Preference: <part>.img, then _a, _b.
+        for part in ('boot', 'init_boot', 'vendor_boot', 'dtbo'):
+            for name in (f"{part}.img", f"{part}_a.img", f"{part}_b.img"):
+                cand = os.path.join(args.reference_dir, name)
+                if os.path.exists(cand):
+                    references[part] = cand
+                    break
+    for item in args.reference:
+        if ':' in item:
+            part, path = item.split(':', 1)
+            references[part.strip()] = path.strip()
+        else:
+            print(f"[WARNING] Ignoring malformed --reference (expected PART:PATH): {item}")
     
     working_dir = args.working_dir or os.getcwd()
     avbtool_path = args.avbtool or os.path.join(working_dir, "tools", "avbtool.py")
@@ -582,7 +640,7 @@ def main():
             print("[INFO] Use --chained-mode option to skip vbmeta.img if only processing chained partitions")
         return False
     
-    rebuilder = AvbRebuilder(working_dir, avbtool_path, args.private_key)
+    rebuilder = AvbRebuilder(working_dir, avbtool_path, args.private_key, references)
     
     if args.verify_only:
         rebuilder.verify_result()
